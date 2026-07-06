@@ -35,6 +35,7 @@
       <button class="tab-btn active" data-tab="buildings" type="button">Buildings</button>
       <button class="tab-btn" data-tab="owned" type="button">Owned</button>
       <button class="tab-btn" data-tab="workers" type="button">Workers</button>
+      <button class="tab-btn" data-tab="upgrades" type="button">Upgrades</button>
       <button class="tab-btn" data-tab="inventory" type="button">Inventory</button>
     </nav>
 
@@ -51,11 +52,17 @@
       <div id="workers-list" class="card-list"></div>
     </section>
 
+    <section id="tab-upgrades" class="tab-panel">
+      <div id="upgrades-header" class="upgrades-header"></div>
+      <div id="upgrades-list" class="card-list"></div>
+    </section>
+
     <section id="tab-inventory" class="tab-panel">
       <div id="inventory-list" class="card-list"></div>
     </section>
   </main>
 
+  <script src="upgrades.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
