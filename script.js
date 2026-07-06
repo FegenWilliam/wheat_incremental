@@ -1,10 +1,12 @@
 // Wheat Incremental — core gameplay
-// Data-driven: new items, buildings, and workers are just entries in the registries.
+// Data-driven and instance-based: every building the player owns is a separate
+// object that workers (and the player) are assigned to individually. This is the
+// foundation for many building types and multiple workers per building.
 
 // --- Static definitions -----------------------------------------------------
 
 // Stockpiled resources. Every item shares one cap (game.itemCap). Money is a
-// separate currency (uncapped) handled below — it is not an item.
+// separate currency (uncapped), handled below — it is not an item.
 const ITEMS = {
   wheat: { name: "Wheat" },
 };
@@ -14,30 +16,29 @@ const SELL_PRICES = {
   wheat: 1,
 };
 
-// Buildings the player can buy. `produces` is added to inventory each turn, per
-// ACTIVE copy. A building with `needsWorker` only counts as active when a worker
-// (a hired worker or the player) is assigned to it.
-// Cost scales with how many you own: ceil(base * costGrowth^owned).
+// Building TYPES. Each owned building is an instance of one of these.
+//   worker  — the worker type this building needs to run (one type for now).
+//   produces — output per turn when the building is "running".
+//   cost/costGrowth — buy price, scaling with how many of this type you own.
 const BUILDINGS = {
   plot: {
     name: "Plot",
-    desc: "Farmland. Each plot that is being farmed yields 10 wheat per turn.",
+    desc: "Farmland. Runs when at least one worker is assigned to it.",
     cost: { money: 50 },
     costGrowth: 1.15,
     produces: { wheat: 10 },
-    needsWorker: true,
+    worker: "farmer",
   },
 };
 
-// Hireable workers. `worksOn` is the building id a worker can be assigned to.
-// One worker farms one building. Hire cost scales like buildings.
+// Hireable worker TYPES. Hired workers form a pool; you assign them to specific
+// buildings on the Owned tab. Hire cost scales with how many you own.
 const WORKERS = {
   farmer: {
     name: "Farmer",
-    desc: "Works a single plot so it produces wheat.",
+    desc: "Works a plot. Assign farmers to specific plots on the Owned tab.",
     cost: { money: 25 },
     costGrowth: 1.15,
-    worksOn: "plot",
   },
 };
 
@@ -49,15 +50,23 @@ const game = {
   itemCap: 200,           // per-item stockpile limit; same for every item
   money: 0,
   inventory: { wheat: 0 },
-  buildings: { plot: 1 }, // start owning 1 Plot
-  workers: { farmer: 0 }, // hired (owned) workers
-  assigned: { farmer: 0 },// workers currently assigned to their worksOn building
-  playerJob: "plot",      // building id the player works, or "idle"
+  workers: { farmer: 0 }, // hired (owned) pool per worker type
+  buildings: [],          // instances: { uid, type, assigned:{worker:n}, player:bool }
+  nextBuildingUid: 1,
 };
+
+// Create a building instance and add it to the world.
+function addBuilding(type, { player = false } = {}) {
+  const inst = { uid: game.nextBuildingUid++, type, assigned: {}, player };
+  game.buildings.push(inst);
+  return inst;
+}
+
+// Start owning one Plot with the player already working it (10 wheat/turn).
+addBuilding("plot", { player: true });
 
 // --- Money / cost helpers ---------------------------------------------------
 
-// Read a balance for either the money currency or a stockpiled item.
 function balance(res) {
   return res === "money" ? game.money : (game.inventory[res] || 0);
 }
@@ -80,35 +89,50 @@ function scaledCost(def, owned) {
   return out;
 }
 
-const buildingCost = (id) => scaledCost(BUILDINGS[id], game.buildings[id] || 0);
-const workerCost = (id) => scaledCost(WORKERS[id], game.workers[id] || 0);
+const ownedCount = (type) => game.buildings.filter((b) => b.type === type).length;
+const buildingCost = (type) => scaledCost(BUILDINGS[type], ownedCount(type));
+const workerCost = (type) => scaledCost(WORKERS[type], game.workers[type] || 0);
 
-// --- Derived values ---------------------------------------------------------
+// --- Worker bookkeeping -----------------------------------------------------
 
-// How many workers (hired + the player) are currently on a given building.
-function workersOn(buildingId) {
-  let n = game.playerJob === buildingId ? 1 : 0;
-  for (const [wid, def] of Object.entries(WORKERS)) {
-    if (def.worksOn === buildingId) n += game.assigned[wid] || 0;
-  }
+const findBuilding = (uid) => game.buildings.find((b) => b.uid === uid);
+
+// Total of a worker type currently assigned across all buildings.
+function totalAssigned(workerType) {
+  return game.buildings.reduce((sum, b) => sum + (b.assigned[workerType] || 0), 0);
+}
+
+// Hired but unassigned workers of a type.
+function idleWorkers(workerType) {
+  return (game.workers[workerType] || 0) - totalAssigned(workerType);
+}
+
+// Everyone working a single building instance (assigned workers + the player).
+function instanceWorkerCount(inst) {
+  let n = inst.player ? 1 : 0;
+  for (const c of Object.values(inst.assigned)) n += c;
   return n;
 }
 
-// Copies of a building that actually produce this turn.
-function activeCount(buildingId) {
-  const def = BUILDINGS[buildingId];
-  const owned = game.buildings[buildingId] || 0;
-  if (!def.needsWorker) return owned;
-  return Math.min(owned, workersOn(buildingId));
+// --- Production -------------------------------------------------------------
+// One place to define how a building turns workers into output. For now a
+// building runs at its base output when it has at least one worker; extra
+// workers don't add yet. When plots should scale with multiple farmers, change
+// only this function (e.g. multiply by worker count, or cap at a capacity).
+function instanceOutput(inst) {
+  const def = BUILDINGS[inst.type];
+  const running = instanceWorkerCount(inst) >= 1 ? 1 : 0;
+  const out = {};
+  for (const [res, amt] of Object.entries(def.produces || {})) out[res] = amt * running;
+  return out;
 }
 
-// Total per-turn production across all buildings, keyed by item.
+// Total per-turn production across every owned building, keyed by item.
 function production() {
   const out = {};
-  for (const [id, def] of Object.entries(BUILDINGS)) {
-    const active = activeCount(id);
-    for (const [res, amt] of Object.entries(def.produces || {})) {
-      out[res] = (out[res] || 0) + amt * active;
+  for (const inst of game.buildings) {
+    for (const [res, amt] of Object.entries(instanceOutput(inst))) {
+      out[res] = (out[res] || 0) + amt;
     }
   }
   return out;
@@ -126,37 +150,44 @@ function passTurn() {
   render();
 }
 
-function buyBuilding(id) {
-  const cost = buildingCost(id);
+function buyBuilding(type) {
+  const cost = buildingCost(type);
   if (!canAfford(cost)) return;
   pay(cost);
-  game.buildings[id] = (game.buildings[id] || 0) + 1;
+  addBuilding(type);
   render();
 }
 
-function hireWorker(id) {
-  const cost = workerCost(id);
+function hireWorker(type) {
+  const cost = workerCost(type);
   if (!canAfford(cost)) return;
   pay(cost);
-  game.workers[id] = (game.workers[id] || 0) + 1;
+  game.workers[type] = (game.workers[type] || 0) + 1;
   render();
 }
 
-// Assign/unassign a hired worker to its building. Clamped to [0, owned].
-function assignWorker(id, delta) {
-  const owned = game.workers[id] || 0;
-  const cur = game.assigned[id] || 0;
-  game.assigned[id] = Math.max(0, Math.min(owned, cur + delta));
+// Assign/unassign a worker to a specific building instance.
+function assignWorker(uid, workerType, delta) {
+  const inst = findBuilding(uid);
+  if (!inst) return;
+  const cur = inst.assigned[workerType] || 0;
+  if (delta > 0 && idleWorkers(workerType) <= 0) return; // none free
+  inst.assigned[workerType] = Math.max(0, cur + delta);
   render();
 }
 
-// Put the player on a building (its id) or set them idle.
-function setPlayerJob(job) {
-  game.playerJob = job;
+// Place the player in a specific building (they leave wherever they were), or
+// pass null to make the player idle.
+function setPlayerAt(uid) {
+  for (const b of game.buildings) b.player = false;
+  if (uid !== null) {
+    const inst = findBuilding(uid);
+    if (inst) inst.player = true;
+  }
   render();
 }
 
-// Sell wheat (or any item) for dollars. `amount` is a number or "all".
+// Sell an item for dollars. `amount` is a number or "all".
 function sell(item, amount) {
   const have = game.inventory[item] || 0;
   const qty = amount === "all" ? have : Math.min(amount, have);
@@ -185,7 +216,8 @@ const wheatPerTurnEl = document.getElementById("wheat-per-turn");
 const passTurnBtn = document.getElementById("pass-turn");
 const turnMessageEl = document.getElementById("turn-message");
 const buildingsListEl = document.getElementById("buildings-list");
-const playerPanelEl = document.getElementById("player-panel");
+const ownedHeaderEl = document.getElementById("owned-header");
+const ownedListEl = document.getElementById("owned-list");
 const workersListEl = document.getElementById("workers-list");
 const inventoryListEl = document.getElementById("inventory-list");
 
@@ -195,6 +227,25 @@ function costLabel(cost) {
   return Object.entries(cost)
     .map(([res, amt]) => (res === "money" ? `$${amt}` : `${amt} ${ITEMS[res].name.toLowerCase()}`))
     .join(", ");
+}
+
+// Player's current location, as a readable string.
+function playerLocation() {
+  const inst = game.buildings.find((b) => b.player);
+  if (!inst) return "Idle";
+  return `${BUILDINGS[inst.type].name} #${instanceNumber(inst)}`;
+}
+
+// The N in "Plot #N": position of this instance among others of its type.
+function instanceNumber(inst) {
+  let n = 0;
+  for (const b of game.buildings) {
+    if (b.type === inst.type) {
+      n += 1;
+      if (b.uid === inst.uid) return n;
+    }
+  }
+  return n;
 }
 
 function renderStats() {
@@ -219,71 +270,95 @@ function renderStats() {
   turnMessageEl.textContent = msg;
 }
 
-function renderBuildings() {
+// Buildings tab = the shop: buy new building instances.
+function renderBuildingsShop() {
   buildingsListEl.innerHTML = "";
-  for (const [id, def] of Object.entries(BUILDINGS)) {
-    const owned = game.buildings[id] || 0;
-    const active = activeCount(id);
-    const cost = buildingCost(id);
+  for (const [type, def] of Object.entries(BUILDINGS)) {
+    const cost = buildingCost(type);
     const affordable = canAfford(cost);
-
-    const workedInfo = def.needsWorker ? ` · Farmed: ${active} / ${owned}` : "";
 
     const card = document.createElement("div");
     card.className = "card";
     card.innerHTML = `
       <div class="card-head">
         <span class="card-name">${def.name}</span>
-        <span class="card-owned">Owned: ${owned}${workedInfo}</span>
+        <span class="card-owned">Owned: ${ownedCount(type)}</span>
       </div>
       <p class="card-desc">${def.desc}</p>
       <div class="btn-row">
         <button class="buy-btn" ${affordable ? "" : "disabled"}>Buy — ${costLabel(cost)}</button>
       </div>
     `;
-    card.querySelector(".buy-btn").addEventListener("click", () => buyBuilding(id));
+    card.querySelector(".buy-btn").addEventListener("click", () => buyBuilding(type));
     buildingsListEl.appendChild(card);
   }
 }
 
-function renderPlayer() {
-  playerPanelEl.innerHTML = "";
-  const card = document.createElement("div");
-  card.className = "card player";
-
-  // One button per building that needs a worker, plus Idle.
-  const jobs = Object.entries(BUILDINGS)
-    .filter(([, def]) => def.needsWorker)
-    .map(([id, def]) => ({ id, label: `Farm ${def.name}` }));
-  jobs.push({ id: "idle", label: "Idle" });
-
-  const buttons = jobs
-    .map(
-      (j) =>
-        `<button class="mini-btn ${game.playerJob === j.id ? "active" : ""}" data-job="${j.id}">${j.label}</button>`
-    )
-    .join("");
-
-  card.innerHTML = `
-    <div class="card-head">
-      <span class="card-name">You</span>
-      <span class="card-owned">${game.playerJob === "idle" ? "Idle" : "Farming"}</span>
+// Owned tab = manage each building instance individually.
+function renderOwned() {
+  // Header: where the player is, plus idle workers available to assign.
+  const idleBits = Object.entries(WORKERS)
+    .map(([id, def]) => `${def.name}s idle: <b>${idleWorkers(id)}</b>`)
+    .join(" &nbsp;·&nbsp; ");
+  ownedHeaderEl.innerHTML = `
+    <div><span class="row-label">You:</span> <b>${playerLocation()}</b>
+      ${game.buildings.some((b) => b.player) ? `<button class="mini-btn go-idle">Go idle</button>` : ""}
     </div>
-    <p class="card-desc">Put yourself to work. You count as one worker wherever you're assigned.</p>
-    <div class="btn-row"><span class="row-label">Assign:</span>${buttons}</div>
+    <div class="idle-line">${idleBits}</div>
   `;
-  card.querySelectorAll(".mini-btn").forEach((btn) =>
-    btn.addEventListener("click", () => setPlayerJob(btn.dataset.job))
-  );
-  playerPanelEl.appendChild(card);
+  const idleBtn = ownedHeaderEl.querySelector(".go-idle");
+  if (idleBtn) idleBtn.addEventListener("click", () => setPlayerAt(null));
+
+  ownedListEl.innerHTML = "";
+  if (game.buildings.length === 0) {
+    ownedListEl.innerHTML = `<p class="card-desc">No buildings yet — buy one on the Buildings tab.</p>`;
+    return;
+  }
+
+  for (const inst of game.buildings) {
+    const def = BUILDINGS[inst.type];
+    const wType = def.worker;
+    const wDef = WORKERS[wType];
+    const assigned = inst.assigned[wType] || 0;
+    const running = instanceWorkerCount(inst) >= 1;
+    const out = instanceOutput(inst);
+    const outLabel = Object.entries(out)
+      .map(([res, amt]) => `+${amt} ${ITEMS[res].name.toLowerCase()}`)
+      .join(", ");
+
+    const card = document.createElement("div");
+    card.className = "card" + (inst.player ? " here" : "");
+    card.innerHTML = `
+      <div class="card-head">
+        <span class="card-name">${def.name} #${instanceNumber(inst)}</span>
+        <span class="card-owned">${running ? outLabel + "/turn" : "Idle — needs a worker"}</span>
+      </div>
+      <div class="assign-line">
+        <span class="row-label">${wDef.name}s:</span>
+        <button class="mini-btn w-minus" ${assigned <= 0 ? "disabled" : ""}>&minus;</button>
+        <span class="badge">${assigned}</span>
+        <button class="mini-btn w-plus" ${idleWorkers(wType) <= 0 ? "disabled" : ""}>+</button>
+        <span class="spacer"></span>
+        <button class="mini-btn player-btn ${inst.player ? "active" : ""}">
+          ${inst.player ? "You: here" : "Work here"}
+        </button>
+      </div>
+    `;
+    card.querySelector(".w-plus").addEventListener("click", () => assignWorker(inst.uid, wType, 1));
+    card.querySelector(".w-minus").addEventListener("click", () => assignWorker(inst.uid, wType, -1));
+    card.querySelector(".player-btn").addEventListener("click", () =>
+      setPlayerAt(inst.player ? null : inst.uid)
+    );
+    ownedListEl.appendChild(card);
+  }
 }
 
+// Workers tab = the hiring pool.
 function renderWorkers() {
   workersListEl.innerHTML = "";
-  for (const [id, def] of Object.entries(WORKERS)) {
-    const owned = game.workers[id] || 0;
-    const assigned = game.assigned[id] || 0;
-    const cost = workerCost(id);
+  for (const [type, def] of Object.entries(WORKERS)) {
+    const owned = game.workers[type] || 0;
+    const cost = workerCost(type);
     const affordable = canAfford(cost);
 
     const card = document.createElement("div");
@@ -291,19 +366,14 @@ function renderWorkers() {
     card.innerHTML = `
       <div class="card-head">
         <span class="card-name">${def.name}</span>
-        <span class="card-owned">Owned: ${owned} · Assigned: ${assigned}</span>
+        <span class="card-owned">Owned: ${owned} · Idle: ${idleWorkers(type)}</span>
       </div>
       <p class="card-desc">${def.desc}</p>
       <div class="btn-row">
-        <button class="buy-btn hire" ${affordable ? "" : "disabled"}>Hire — ${costLabel(cost)}</button>
-        <span class="row-label">Assign:</span>
-        <button class="mini-btn unassign" ${assigned <= 0 ? "disabled" : ""}>&minus;</button>
-        <button class="mini-btn assign" ${assigned >= owned ? "disabled" : ""}>+</button>
+        <button class="buy-btn" ${affordable ? "" : "disabled"}>Hire — ${costLabel(cost)}</button>
       </div>
     `;
-    card.querySelector(".hire").addEventListener("click", () => hireWorker(id));
-    card.querySelector(".assign").addEventListener("click", () => assignWorker(id, 1));
-    card.querySelector(".unassign").addEventListener("click", () => assignWorker(id, -1));
+    card.querySelector(".buy-btn").addEventListener("click", () => hireWorker(type));
     workersListEl.appendChild(card);
   }
 }
@@ -340,8 +410,8 @@ function renderInventory() {
 
 function render() {
   renderStats();
-  renderBuildings();
-  renderPlayer();
+  renderBuildingsShop();
+  renderOwned();
   renderWorkers();
   renderInventory();
 }
@@ -364,8 +434,8 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 window.wheatGame = {
   state: game,
   ITEMS, BUILDINGS, WORKERS,
-  passTurn, buyBuilding, hireWorker, assignWorker, setPlayerJob, sell,
-  increaseTurnLimit, production,
+  passTurn, buyBuilding, hireWorker, assignWorker, setPlayerAt, sell,
+  addBuilding, increaseTurnLimit, production, idleWorkers,
 };
 
 render();

@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Wheat Incremental 0.1</title>
+  <title>Wheat Incremental</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main class="game">
-    <h1>Wheat Incremental Game</h1>
+    <h1>Wheat Incremental</h1>
 
     <section class="stats">
       <div class="stat">
@@ -33,6 +33,7 @@
 
     <nav class="tabs">
       <button class="tab-btn active" data-tab="buildings" type="button">Buildings</button>
+      <button class="tab-btn" data-tab="owned" type="button">Owned</button>
       <button class="tab-btn" data-tab="workers" type="button">Workers</button>
       <button class="tab-btn" data-tab="inventory" type="button">Inventory</button>
     </nav>
@@ -41,8 +42,12 @@
       <div id="buildings-list" class="card-list"></div>
     </section>
 
+    <section id="tab-owned" class="tab-panel">
+      <div id="owned-header" class="owned-header"></div>
+      <div id="owned-list" class="card-list"></div>
+    </section>
+
     <section id="tab-workers" class="tab-panel">
-      <div id="player-panel" class="card-list"></div>
       <div id="workers-list" class="card-list"></div>
     </section>
 
