@@ -143,6 +143,46 @@ h1 {
 }
 
 .card.player { border-color: rgba(126, 196, 107, 0.4); }
+.card.here { border-color: rgba(126, 196, 107, 0.55); background: #2c2b1e; }
+
+/* --- Owned tab --- */
+.owned-header {
+  background: var(--panel);
+  border: 1px solid rgba(227, 176, 75, 0.2);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.95rem;
+}
+
+.owned-header b { color: var(--wheat); }
+.owned-header .go-idle { margin-left: 0.6rem; }
+
+.idle-line {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.idle-line b { color: var(--money); }
+
+.assign-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+}
+
+.assign-line .spacer { flex: 1; }
+
+.badge {
+  min-width: 1.6rem;
+  text-align: center;
+  font-weight: 600;
+  color: var(--text);
+}
 
 .card-head {
   display: flex;
