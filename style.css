@@ -264,6 +264,54 @@ h1 {
   margin-right: 0.15rem;
 }
 
+/* --- Upgrades tab --- */
+.upgrades-header {
+  background: var(--panel);
+  border: 1px solid rgba(227, 176, 75, 0.2);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.upgrades-header b { color: var(--wheat); }
+
+.upgrade-cat {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 0.75rem 0 -0.1rem;
+}
+.upgrade-cat:first-child { margin-top: 0; }
+
+.card.upgrade .lvl {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--money);
+  margin-left: 0.3rem;
+}
+
+.card.upgrade.owned { opacity: 0.6; border-color: rgba(126, 196, 107, 0.35); }
+.card.upgrade.locked { opacity: 0.55; }
+
+.owned-tag {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--money);
+}
+.lock-tag {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.cap-note {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-left: 0.2rem;
+}
+
 /* --- Inventory bars --- */
 .inv-amount { font-size: 0.9rem; color: var(--muted); }
 .inv-amount.full { color: var(--full); }

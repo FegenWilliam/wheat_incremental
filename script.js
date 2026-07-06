@@ -53,6 +53,7 @@ const game = {
   workers: { farmer: 0 }, // hired (owned) pool per worker type
   buildings: [],          // instances: { uid, type, assigned:{worker:n}, player:bool }
   nextBuildingUid: 1,
+  upgrades: {},           // purchased upgrades: id -> level (1 for one-time buys)
 };
 
 // Create a building instance and add it to the world.
@@ -93,6 +94,71 @@ const ownedCount = (type) => game.buildings.filter((b) => b.type === type).lengt
 const buildingCost = (type) => scaledCost(BUILDINGS[type], ownedCount(type));
 const workerCost = (type) => scaledCost(WORKERS[type], game.workers[type] || 0);
 
+// --- Upgrades ---------------------------------------------------------------
+// The upgrade DATA lives in upgrades.js (UPGRADES / BASE_STATS / STAT_INFO),
+// which is loaded before this file. Everything here is the engine that reads
+// that data — you shouldn't need to edit it to add upgrades.
+
+const upgradeLevel = (id) => game.upgrades[id] || 0;
+const findUpgrade = (id) => UPGRADES.find((u) => u.id === id);
+const upgradeMaxLevel = (up) => (up.repeatable ? (up.maxLevel ?? Infinity) : 1);
+
+// Turn an effect entry into { add, mult }. A bare number means "add".
+function normalizeMod(mod) {
+  if (typeof mod === "number") return { add: mod, mult: 0 };
+  return { add: mod.add || 0, mult: mod.mult || 0 };
+}
+
+// Derived stats = base values with every owned upgrade applied. Additives are
+// summed onto the base, then multipliers apply, so purchase order is irrelevant.
+// Cached because with hundreds of upgrades we don't want to recompute per card.
+let cachedStats = null;
+const invalidateStats = () => { cachedStats = null; };
+
+function deriveStats() {
+  if (cachedStats) return cachedStats;
+  const stats = { ...BASE_STATS };
+  const mults = {};
+  for (const up of UPGRADES) {
+    const level = upgradeLevel(up.id);
+    if (level <= 0) continue;
+    for (const [stat, mod] of Object.entries(up.effects || {})) {
+      const { add, mult } = normalizeMod(mod);
+      if (add) stats[stat] = (stats[stat] ?? 0) + add * level;
+      if (mult) mults[stat] = (mults[stat] ?? 1) * Math.pow(mult, level);
+    }
+  }
+  for (const [stat, m] of Object.entries(mults)) stats[stat] = (stats[stat] ?? 0) * m;
+  cachedStats = stats;
+  return stats;
+}
+
+// Cost of the *next* level. Repeatable upgrades scale with how many you own.
+function upgradeCost(up) {
+  if (!up.repeatable) return { ...up.cost };
+  const scale = Math.pow(up.costGrowth ?? 1.15, upgradeLevel(up.id));
+  const out = {};
+  for (const [res, amt] of Object.entries(up.cost)) out[res] = Math.ceil(amt * scale);
+  return out;
+}
+
+const requirementsMet = (up) => (up.requires || []).every((id) => upgradeLevel(id) > 0);
+
+function canBuyUpgrade(up) {
+  return requirementsMet(up)
+    && upgradeLevel(up.id) < upgradeMaxLevel(up)
+    && canAfford(upgradeCost(up));
+}
+
+function buyUpgrade(id) {
+  const up = findUpgrade(id);
+  if (!up || !canBuyUpgrade(up)) return;
+  pay(upgradeCost(up));
+  game.upgrades[id] = upgradeLevel(id) + 1;
+  invalidateStats();
+  render();
+}
+
 // --- Worker bookkeeping -----------------------------------------------------
 
 const findBuilding = (uid) => game.buildings.find((b) => b.uid === uid);
@@ -114,16 +180,25 @@ function instanceWorkerCount(inst) {
   return n;
 }
 
+// How many farmers can productively work one building at once (Coordination
+// upgrades raise this). Extra workers beyond the cap sit idle and add nothing.
+const plotCapacity = () => Math.max(1, Math.floor(deriveStats().maxFarmersPerPlot));
+
 // --- Production -------------------------------------------------------------
-// One place to define how a building turns workers into output. For now a
-// building runs at its base output when it has at least one worker; extra
-// workers don't add yet. When plots should scale with multiple farmers, change
-// only this function (e.g. multiply by worker count, or cap at a capacity).
+// Output scales per farmer: each of the (capped) workers on a building produces
+// the building's base output, and for wheat that per-farmer amount is the
+// upgrade-driven `wheatPerFarmer` stat. So a plot with 2 farmers and a
+// wheatPerFarmer of 12 makes 24 wheat/turn. Change this function to add other
+// per-worker resources or building-specific rules.
 function instanceOutput(inst) {
   const def = BUILDINGS[inst.type];
-  const running = instanceWorkerCount(inst) >= 1 ? 1 : 0;
+  const stats = deriveStats();
+  const farmers = Math.min(instanceWorkerCount(inst), plotCapacity());
   const out = {};
-  for (const [res, amt] of Object.entries(def.produces || {})) out[res] = amt * running;
+  for (const [res, base] of Object.entries(def.produces || {})) {
+    const perFarmer = res === "wheat" ? stats.wheatPerFarmer : base;
+    out[res] = perFarmer * farmers;
+  }
   return out;
 }
 
@@ -171,7 +246,10 @@ function assignWorker(uid, workerType, delta) {
   const inst = findBuilding(uid);
   if (!inst) return;
   const cur = inst.assigned[workerType] || 0;
-  if (delta > 0 && idleWorkers(workerType) <= 0) return; // none free
+  if (delta > 0) {
+    if (idleWorkers(workerType) <= 0) return;                 // none free to add
+    if (instanceWorkerCount(inst) >= plotCapacity()) return;  // plot already full
+  }
   inst.assigned[workerType] = Math.max(0, cur + delta);
   render();
 }
@@ -219,6 +297,8 @@ const buildingsListEl = document.getElementById("buildings-list");
 const ownedHeaderEl = document.getElementById("owned-header");
 const ownedListEl = document.getElementById("owned-list");
 const workersListEl = document.getElementById("workers-list");
+const upgradesHeaderEl = document.getElementById("upgrades-header");
+const upgradesListEl = document.getElementById("upgrades-list");
 const inventoryListEl = document.getElementById("inventory-list");
 
 // --- Rendering --------------------------------------------------------------
@@ -320,7 +400,10 @@ function renderOwned() {
     const wType = def.worker;
     const wDef = WORKERS[wType];
     const assigned = inst.assigned[wType] || 0;
-    const running = instanceWorkerCount(inst) >= 1;
+    const here = instanceWorkerCount(inst);
+    const cap = plotCapacity();
+    const full = here >= cap;
+    const running = here >= 1;
     const out = instanceOutput(inst);
     const outLabel = Object.entries(out)
       .map(([res, amt]) => `+${amt} ${ITEMS[res].name.toLowerCase()}`)
@@ -337,7 +420,8 @@ function renderOwned() {
         <span class="row-label">${wDef.name}s:</span>
         <button class="mini-btn w-minus" ${assigned <= 0 ? "disabled" : ""}>&minus;</button>
         <span class="badge">${assigned}</span>
-        <button class="mini-btn w-plus" ${idleWorkers(wType) <= 0 ? "disabled" : ""}>+</button>
+        <button class="mini-btn w-plus" ${idleWorkers(wType) <= 0 || full ? "disabled" : ""}>+</button>
+        <span class="cap-note">${here}/${cap} working</span>
         <span class="spacer"></span>
         <button class="mini-btn player-btn ${inst.player ? "active" : ""}">
           ${inst.player ? "You: here" : "Work here"}
@@ -378,6 +462,84 @@ function renderWorkers() {
   }
 }
 
+// A readable "+2 wheat per farmer, ×1.5 …" line, generated from an upgrade's
+// effects so new upgrades describe themselves with no extra work.
+function effectLabel(up) {
+  const parts = [];
+  for (const [stat, mod] of Object.entries(up.effects || {})) {
+    const label = (STAT_INFO[stat] || {}).label || stat;
+    const { add, mult } = normalizeMod(mod);
+    if (add) parts.push(`+${add} ${label}`);
+    if (mult) parts.push(`×${mult} ${label}`);
+  }
+  return parts.join(", ");
+}
+
+function formatStat(stat, val) {
+  return (STAT_INFO[stat] || {}).integer ? Math.floor(val) : Math.round(val * 100) / 100;
+}
+
+function upgradeCard(up) {
+  const level = upgradeLevel(up.id);
+  const maxed = level >= upgradeMaxLevel(up);
+  const locked = !requirementsMet(up);
+  const cost = upgradeCost(up);
+  const affordable = canAfford(cost);
+
+  const card = document.createElement("div");
+  card.className = "card upgrade" + (maxed ? " owned" : "") + (locked && !maxed ? " locked" : "");
+
+  const levelTag = up.repeatable
+    ? ` <span class="lvl">Lv ${level}${up.maxLevel ? "/" + up.maxLevel : ""}</span>`
+    : (level > 0 ? ` <span class="lvl">✓</span>` : "");
+
+  let action;
+  if (maxed) {
+    action = `<span class="owned-tag">${up.repeatable ? "Maxed" : "Owned"}</span>`;
+  } else if (locked) {
+    const names = up.requires.map((id) => (findUpgrade(id)?.name) || id);
+    action = `<span class="lock-tag">🔒 Requires: ${names.join(", ")}</span>`;
+  } else {
+    action = `<button class="buy-btn" ${affordable ? "" : "disabled"}>Buy — ${costLabel(cost)}</button>`;
+  }
+
+  card.innerHTML = `
+    <div class="card-head">
+      <span class="card-name">${up.name}${levelTag}</span>
+      <span class="card-owned">${effectLabel(up)}</span>
+    </div>
+    ${up.desc ? `<p class="card-desc">${up.desc}</p>` : ""}
+    <div class="btn-row">${action}</div>
+  `;
+  const btn = card.querySelector(".buy-btn");
+  if (btn) btn.addEventListener("click", () => buyUpgrade(up.id));
+  return card;
+}
+
+// Upgrades tab = spend money/wheat on permanent bonuses, grouped by category.
+function renderUpgrades() {
+  const stats = deriveStats();
+  upgradesHeaderEl.innerHTML = Object.keys(STAT_INFO)
+    .map((stat) => `${(STAT_INFO[stat] || {}).label}: <b>${formatStat(stat, stats[stat] ?? 0)}</b>`)
+    .join(" &nbsp;·&nbsp; ");
+
+  upgradesListEl.innerHTML = "";
+  // Group by category, preserving the order categories first appear in the file.
+  const groups = new Map();
+  for (const up of UPGRADES) {
+    const cat = up.category || "Misc";
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push(up);
+  }
+  for (const [cat, list] of groups) {
+    const heading = document.createElement("h2");
+    heading.className = "upgrade-cat";
+    heading.textContent = cat;
+    upgradesListEl.appendChild(heading);
+    for (const up of list) upgradesListEl.appendChild(upgradeCard(up));
+  }
+}
+
 function renderInventory() {
   inventoryListEl.innerHTML = "";
   for (const [id, def] of Object.entries(ITEMS)) {
@@ -413,6 +575,7 @@ function render() {
   renderBuildingsShop();
   renderOwned();
   renderWorkers();
+  renderUpgrades();
   renderInventory();
 }
 
@@ -433,9 +596,10 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 // Expose the core API for the console and future systems.
 window.wheatGame = {
   state: game,
-  ITEMS, BUILDINGS, WORKERS,
+  ITEMS, BUILDINGS, WORKERS, UPGRADES,
   passTurn, buyBuilding, hireWorker, assignWorker, setPlayerAt, sell,
   addBuilding, increaseTurnLimit, production, idleWorkers,
+  buyUpgrade, deriveStats, plotCapacity,
 };
 
 render();
