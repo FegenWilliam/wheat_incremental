@@ -3,8 +3,10 @@
   --wheat-dark: #b9862c;
   --bg: #1c1a14;
   --panel: #2a2720;
+  --panel-light: #34301f;
   --text: #f2e9d0;
   --muted: #a8a090;
+  --full: #e06a4b;
 }
 
 * {
@@ -19,69 +21,189 @@ body {
   color: var(--text);
   min-height: 100vh;
   display: flex;
-  align-items: center;
   justify-content: center;
+  padding: 2rem 1rem;
 }
 
 .game {
-  text-align: center;
-  padding: 2rem;
+  width: 100%;
+  max-width: 640px;
 }
 
 h1 {
   color: var(--wheat);
+  text-align: center;
   margin-bottom: 1.5rem;
   letter-spacing: 0.02em;
 }
 
-.turn-panel {
+/* --- Stats bar --- */
+.stats {
   background: var(--panel);
   border: 1px solid rgba(227, 176, 75, 0.25);
   border-radius: 12px;
-  padding: 2rem 3rem;
-  display: inline-flex;
-  flex-direction: column;
+  padding: 1rem 1.25rem;
+  display: flex;
   align-items: center;
   gap: 1.25rem;
-  min-width: 260px;
+  flex-wrap: wrap;
 }
 
-.turn-counter {
-  font-size: 1.5rem;
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.stat-value {
+  font-size: 1.25rem;
   font-weight: 600;
-}
-
-.turn-counter span {
   color: var(--wheat);
 }
 
+.stat-value.full {
+  color: var(--full);
+}
+
 #pass-turn {
-  font-size: 1.1rem;
+  margin-left: auto;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--bg);
   background: var(--wheat);
   border: none;
   border-radius: 8px;
-  padding: 0.75rem 2rem;
+  padding: 0.7rem 1.6rem;
   cursor: pointer;
   transition: background 0.15s ease, transform 0.05s ease;
 }
 
-#pass-turn:hover:not(:disabled) {
-  background: var(--wheat-dark);
-}
-
-#pass-turn:active:not(:disabled) {
-  transform: translateY(1px);
-}
-
-#pass-turn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+#pass-turn:hover:not(:disabled) { background: var(--wheat-dark); }
+#pass-turn:active:not(:disabled) { transform: translateY(1px); }
+#pass-turn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .turn-message {
   color: var(--muted);
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   min-height: 1.2em;
+  text-align: center;
+  margin: 0.6rem 0 0.2rem;
 }
+
+/* --- Tabs --- */
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1.25rem 0 1rem;
+}
+
+.tab-btn {
+  flex: 1;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.6rem;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.tab-btn:hover { color: var(--text); }
+
+.tab-btn.active {
+  color: var(--wheat);
+  border-color: rgba(227, 176, 75, 0.4);
+}
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* --- Cards --- */
+.card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid rgba(227, 176, 75, 0.2);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.card-name {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.card-owned {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.card-desc {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin: 0.35rem 0 0.75rem;
+}
+
+.buy-btn {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--wheat);
+  border: none;
+  border-radius: 7px;
+  padding: 0.5rem 1.1rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.buy-btn:hover:not(:disabled) { background: var(--wheat-dark); }
+.buy-btn:disabled {
+  background: var(--panel-light);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+/* --- Inventory bars --- */
+.inv-amount {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.inv-amount.full { color: var(--full); }
+
+.bar {
+  margin-top: 0.5rem;
+  height: 8px;
+  background: var(--panel-light);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: var(--wheat);
+  transition: width 0.2s ease;
+}
+
+.bar-fill.full { background: var(--full); }
