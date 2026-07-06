@@ -1,6 +1,7 @@
 :root {
   --wheat: #e3b04b;
   --wheat-dark: #b9862c;
+  --money: #7ec46b;
   --bg: #1c1a14;
   --panel: #2a2720;
   --panel-light: #34301f;
@@ -68,9 +69,7 @@ h1 {
   color: var(--wheat);
 }
 
-.stat-value.full {
-  color: var(--full);
-}
+.stat-value.full { color: var(--full); }
 
 #pass-turn {
   margin-left: auto;
@@ -134,12 +133,16 @@ h1 {
   gap: 0.75rem;
 }
 
+.card-list + .card-list { margin-top: 0.75rem; }
+
 .card {
   background: var(--panel);
   border: 1px solid rgba(227, 176, 75, 0.2);
   border-radius: 10px;
   padding: 1rem 1.25rem;
 }
+
+.card.player { border-color: rgba(126, 196, 107, 0.4); }
 
 .card-head {
   display: flex;
@@ -157,12 +160,21 @@ h1 {
 .card-owned {
   font-size: 0.9rem;
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .card-desc {
   font-size: 0.9rem;
   color: var(--muted);
-  margin: 0.35rem 0 0.75rem;
+  margin: 0.35rem 0 0.25rem;
+}
+
+.btn-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 0.75rem;
 }
 
 .buy-btn {
@@ -184,12 +196,36 @@ h1 {
   cursor: not-allowed;
 }
 
-/* --- Inventory bars --- */
-.inv-amount {
-  font-size: 0.9rem;
-  color: var(--muted);
+/* --- Small secondary buttons (assign, sell, designate) --- */
+.mini-btn {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel-light);
+  border: 1px solid rgba(227, 176, 75, 0.25);
+  border-radius: 7px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
+.mini-btn:hover:not(:disabled) { border-color: var(--wheat); }
+.mini-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.mini-btn.active {
+  background: var(--money);
+  color: var(--bg);
+  border-color: var(--money);
+}
+
+.row-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-right: 0.15rem;
+}
+
+/* --- Inventory bars --- */
+.inv-amount { font-size: 0.9rem; color: var(--muted); }
 .inv-amount.full { color: var(--full); }
 
 .bar {

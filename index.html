@@ -20,6 +20,10 @@
         <span class="stat-value" id="wheat-stat"><span id="wheat-amount">0</span> / <span id="wheat-cap">200</span></span>
       </div>
       <div class="stat">
+        <span class="stat-label">Money</span>
+        <span class="stat-value">$<span id="money-amount">0</span></span>
+      </div>
+      <div class="stat">
         <span class="stat-label">Per Turn</span>
         <span class="stat-value">+<span id="wheat-per-turn">10</span></span>
       </div>
@@ -29,11 +33,17 @@
 
     <nav class="tabs">
       <button class="tab-btn active" data-tab="buildings" type="button">Buildings</button>
+      <button class="tab-btn" data-tab="workers" type="button">Workers</button>
       <button class="tab-btn" data-tab="inventory" type="button">Inventory</button>
     </nav>
 
     <section id="tab-buildings" class="tab-panel active">
       <div id="buildings-list" class="card-list"></div>
+    </section>
+
+    <section id="tab-workers" class="tab-panel">
+      <div id="player-panel" class="card-list"></div>
+      <div id="workers-list" class="card-list"></div>
     </section>
 
     <section id="tab-inventory" class="tab-panel">
