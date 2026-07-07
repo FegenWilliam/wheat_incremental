@@ -34,13 +34,16 @@
 // ---- Stats you can modify ---------------------------------------------------
 //   wheatPerFarmer     base 10  — wheat each farmer makes per plot, per turn.
 //   maxFarmersPerPlot  base 1   — how many farmers can work one plot at once.
-//   wheatPerMill       base 20  — wheat one miller feeds into a mill, per turn.
-//   flourPerMill       base 10  — rough flour one miller mills, per turn.
-//   maxMillersPerMill  base 1   — how many millers can work one mill at once.
+//   wheatPerMill       base 20  — wheat one mill feeds in, per turn (the "rate").
+//   flourPerMill       base 10  — rough flour one mill grinds out, per turn.
+//   roughFlourPrice    base 4   — dollars each rough flour sells for.
 //
-// The mill's 2:1 ratio is just wheatPerMill / flourPerMill, and its throughput
-// is those two numbers — so upgrades can retune the rate OR the ratio by nudging
-// either stat. (Rough flour's sell price lives in SELL_PRICES in script.js.)
+// The mill's ratio is wheatPerMill : flourPerMill (base 20:10 = 2:1). To change:
+//   • RATE  — multiply BOTH stats by the same factor to scale throughput while
+//             keeping the ratio (×2 → 40 wheat in, 20 flour out).
+//   • RATIO — add to flourPerMill alone to improve the yield (+2 → 20:12 = 10:6).
+//   • PRICE — add to roughFlourPrice (+2 → sells for $6).
+// (One mill = one miller; that cap is fixed in script.js, no stat for it.)
 //
 // Want a brand-new stat? Add it to BASE_STATS and STAT_INFO just below, then any
 // upgrade can target it. (Making it actually *do* something in production lives
@@ -53,7 +56,7 @@ const BASE_STATS = {
   maxFarmersPerPlot: 1,
   wheatPerMill: 20,
   flourPerMill: 10,
-  maxMillersPerMill: 1,
+  roughFlourPrice: 4,
 };
 
 // How each stat reads on cards / in the header. `integer: true` rounds down for
@@ -61,9 +64,9 @@ const BASE_STATS = {
 const STAT_INFO = {
   wheatPerFarmer:    { label: "wheat per farmer",     integer: false },
   maxFarmersPerPlot: { label: "max farmers per plot", integer: true  },
-  wheatPerMill:      { label: "wheat per mill",       integer: false },
-  flourPerMill:      { label: "flour per mill",       integer: false },
-  maxMillersPerMill: { label: "max millers per mill", integer: true  },
+  wheatPerMill:      { label: "wheat per mill",       integer: true  },
+  flourPerMill:      { label: "flour per mill",       integer: true  },
+  roughFlourPrice:   { label: "rough flour price ($)", integer: true },
 };
 
 // =============================================================================
@@ -145,5 +148,99 @@ const UPGRADES = [
     cost: { money: 3000, wheat: 150 },
     requires: ["coord_shift_work"],
     effects: { maxFarmersPerPlot: 2 },
+  },
+
+  // --- Mill Yield — more flour from the same wheat (improves the ratio) -------
+  // These add to flourPerMill only, so 20 wheat in yields more flour out:
+  // base 20:10 (2:1) → 20:12 (10:6) → 20:14 (10:7) → 20:18 (≈10:9).
+  {
+    id: "mill_finer_grind",
+    name: "Finer Grind",
+    category: "Mill Yield",
+    desc: "Tighter millstones waste less grain — more flour per load. Ratio 10:6.",
+    cost: { money: 250 },
+    effects: { flourPerMill: 2 },
+  },
+  {
+    id: "mill_bran_recovery",
+    name: "Bran Recovery",
+    category: "Mill Yield",
+    desc: "Sieve back the bran instead of tossing it. Ratio 10:7.",
+    cost: { money: 800 },
+    requires: ["mill_finer_grind"],
+    effects: { flourPerMill: 2 },
+  },
+  {
+    id: "mill_double_sift",
+    name: "Double Sift",
+    category: "Mill Yield",
+    desc: "A second pass squeezes out every usable grain. Ratio ≈10:9.",
+    cost: { money: 2200, wheat: 120 },
+    requires: ["mill_bran_recovery"],
+    effects: { flourPerMill: 4 },
+  },
+
+  // --- Mill Throughput — scale the RATE, keeping the ratio -------------------
+  // Multipliers hit BOTH wheatPerMill and flourPerMill, so a mill chews through
+  // proportionally more wheat for proportionally more flour.
+  {
+    id: "mill_bigger_stones",
+    name: "Bigger Millstones",
+    category: "Mill Throughput",
+    desc: "Heavier stones handle half again as much each turn (×1.5 rate).",
+    cost: { money: 500 },
+    effects: { wheatPerMill: { mult: 1.5 }, flourPerMill: { mult: 1.5 } },
+  },
+  {
+    id: "mill_water_wheel",
+    name: "Water Wheel",
+    category: "Mill Throughput",
+    desc: "Let the river do the work — double the throughput (×2 rate).",
+    cost: { money: 1600, wheat: 100 },
+    requires: ["mill_bigger_stones"],
+    effects: { wheatPerMill: { mult: 2 }, flourPerMill: { mult: 2 } },
+  },
+  {
+    id: "mill_overdrive",
+    name: "Grinding Overdrive",
+    category: "Mill Throughput",
+    desc: "Push the mill harder and harder. +25% rate each time you buy it.",
+    cost: { money: 900 },
+    requires: ["mill_bigger_stones"],
+    repeatable: true,
+    maxLevel: 6,
+    costGrowth: 1.4,
+    effects: { wheatPerMill: { mult: 1.25 }, flourPerMill: { mult: 1.25 } },
+  },
+
+  // --- Flour Market — raise what rough flour sells for -----------------------
+  {
+    id: "mill_sturdy_sacks",
+    name: "Sturdy Sacks",
+    category: "Flour Market",
+    desc: "Cleaner, better-kept flour fetches a higher price. +$2 each.",
+    cost: { money: 350 },
+    effects: { roughFlourPrice: 2 },
+  },
+  {
+    id: "mill_town_contract",
+    name: "Town Contract",
+    category: "Flour Market",
+    desc: "A standing order from the town baker. +$2 per rough flour.",
+    cost: { money: 1000 },
+    requires: ["mill_sturdy_sacks"],
+    effects: { roughFlourPrice: 2 },
+  },
+  {
+    id: "mill_export_deal",
+    name: "Export Deal",
+    category: "Flour Market",
+    desc: "Ship flour further afield for a little more each. Buy again and again.",
+    cost: { money: 600 },
+    requires: ["mill_town_contract"],
+    repeatable: true,
+    maxLevel: 10,
+    costGrowth: 1.3,
+    effects: { roughFlourPrice: 1 },
   },
 ];

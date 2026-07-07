@@ -12,11 +12,25 @@ const ITEMS = {
   roughFlour: { name: "Rough Flour" },
 };
 
-// What each item sells for, in dollars.
+// What each item sells for, in dollars. This is the base/fallback price; an
+// item listed in PRICE_STATS instead takes its price from that (upgradeable)
+// stat, so market upgrades can raise it.
 const SELL_PRICES = {
   wheat: 1,
-  roughFlour: 4,
 };
+
+// Items whose sell price is a derived stat (see BASE_STATS in upgrades.js).
+const PRICE_STATS = {
+  roughFlour: "roughFlourPrice",
+};
+
+// Current sell price of an item: the upgrade-driven stat if it has one, else
+// its flat SELL_PRICES entry.
+function sellPrice(item) {
+  const stat = PRICE_STATS[item];
+  if (stat) return Math.max(0, Math.round(deriveStats()[stat] ?? 0));
+  return SELL_PRICES[item] || 0;
+}
 
 // Building TYPES. Each owned building is an instance of one of these.
 //   worker       — the worker type this building needs to run (one type each).
@@ -46,7 +60,6 @@ const BUILDINGS = {
     consumes: { wheat: 20 },
     produces: { roughFlour: 10 },
     worker: "miller",
-    capacityStat: "maxMillersPerMill",
     rateStats: { wheat: "wheatPerMill", roughFlour: "flourPerMill" },
   },
 };
@@ -229,9 +242,11 @@ function instanceRates(inst) {
   const def = BUILDINGS[inst.type];
   const stats = deriveStats();
   const workers = Math.min(instanceWorkerCount(inst), instanceCapacity(inst));
+  // Floored so upgrade multipliers (e.g. a ×1.5 rate) never leave fractional
+  // wheat or flour in the stockpile.
   const rate = (res, base) => {
     const stat = def.rateStats && def.rateStats[res];
-    return (stat ? stats[stat] : base) * workers;
+    return Math.floor((stat ? stats[stat] : base) * workers);
   };
   const produces = {};
   const consumes = {};
@@ -332,7 +347,7 @@ function sell(item, amount) {
   const qty = amount === "all" ? have : Math.min(amount, have);
   if (qty <= 0) return;
   game.inventory[item] -= qty;
-  game.money += qty * (SELL_PRICES[item] || 0);
+  game.money += qty * sellPrice(item);
   render();
 }
 
@@ -617,7 +632,7 @@ function renderInventory() {
     const amount = game.inventory[id] || 0;
     const pct = Math.min(100, (amount / game.itemCap) * 100);
     const atCap = amount >= game.itemCap;
-    const price = SELL_PRICES[id] || 0;
+    const price = sellPrice(id);
 
     const card = document.createElement("div");
     card.className = "card";
@@ -668,7 +683,7 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 window.wheatGame = {
   state: game,
   ITEMS, BUILDINGS, WORKERS, UPGRADES,
-  passTurn, buyBuilding, hireWorker, assignWorker, setPlayerAt, sell,
+  passTurn, buyBuilding, hireWorker, assignWorker, setPlayerAt, sell, sellPrice,
   addBuilding, increaseTurnLimit, production, idleWorkers,
   buyUpgrade, deriveStats, plotCapacity, instanceCapacity, instanceRates,
 };
