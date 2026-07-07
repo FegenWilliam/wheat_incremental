@@ -10,6 +10,12 @@
   <main class="game">
     <h1>Wheat Incremental</h1>
 
+    <div id="prestige-bar" class="prestige-bar hidden">
+      <button id="open-rp-shop" type="button" class="prestige-btn">Retirement Points Shop</button>
+      <button id="open-retirement-shop" type="button" class="prestige-btn hidden">Retirement Shop</button>
+      <button id="retire-btn" type="button" class="prestige-btn danger">Retire</button>
+    </div>
+
     <section class="stats">
       <div class="stat">
         <span class="stat-label">Turn</span>
@@ -61,6 +67,46 @@
       <div id="inventory-list" class="card-list"></div>
     </section>
   </main>
+
+  <!-- Full-page prestige overlays. Hidden until opened from the prestige bar. -->
+  <div id="screen-rp-shop" class="screen hidden">
+    <div class="screen-inner">
+      <div class="screen-head">
+        <h2>Retirement Points Shop</h2>
+        <button class="back-btn" type="button" data-close-screen>← Back to farm</button>
+      </div>
+      <p class="screen-sub">Trade your leftover resources for Retirement Points. RP is kept forever — it survives retirement, so spend everything here before you retire.</p>
+      <div class="rp-balance">Retirement Points: <b id="rp-balance-shop">0</b></div>
+      <div id="rp-shop-list" class="card-list"></div>
+    </div>
+  </div>
+
+  <div id="screen-retirement-shop" class="screen hidden">
+    <div class="screen-inner">
+      <div class="screen-head">
+        <h2>Retirement Shop</h2>
+        <button class="back-btn" type="button" data-close-screen>← Back to farm</button>
+      </div>
+      <p class="screen-sub">Spend Retirement Points on permanent upgrades. These persist through every retirement.</p>
+      <div class="rp-balance">Retirement Points: <b id="rp-balance-perm">0</b></div>
+      <h2 class="upgrade-cat">Permanent Upgrades</h2>
+      <div id="perm-upgrades-list" class="card-list"></div>
+    </div>
+  </div>
+
+  <!-- Retire confirmation. -->
+  <div id="retire-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <h2>Retire?</h2>
+      <p>Retiring resets your farm — money, wheat, flour, buildings, workers and run upgrades all go back to the start.</p>
+      <p>You keep your <b>Retirement Points</b> and every <b>Permanent Upgrade</b>.</p>
+      <p class="modal-note">Spend your resources in the Retirement Points Shop first — anything left is lost.</p>
+      <div class="modal-actions">
+        <button id="retire-cancel" type="button" class="mini-btn">Cancel</button>
+        <button id="retire-confirm" type="button" class="buy-btn danger">Retire</button>
+      </div>
+    </div>
+  </div>
 
   <script src="upgrades.js"></script>
   <script src="script.js"></script>

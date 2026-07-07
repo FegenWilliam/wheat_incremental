@@ -57,16 +57,25 @@ const BASE_STATS = {
   wheatPerMill: 20,
   flourPerMill: 10,
   roughFlourPrice: 4,
+  // --- Prestige stats. Driven by PERMANENT_UPGRADES (bought with Retirement
+  // Points) and applied at the start of each run — see script.js. ---
+  startingMoney: 0,   // dollars in the bank at the start of every run
+  bonusTurnLimit: 0,  // extra turns added onto the base 80-turn limit
+  itemCapBonus: 0,    // extra stockpile room added onto the base 200 cap
 };
 
 // How each stat reads on cards / in the header. `integer: true` rounds down for
-// display (you can't have half a farmer slot).
+// display (you can't have half a farmer slot). `internal: true` keeps a stat out
+// of the ordinary Upgrades header (used for prestige-only stats).
 const STAT_INFO = {
   wheatPerFarmer:    { label: "wheat per farmer",     integer: false },
   maxFarmersPerPlot: { label: "max farmers per plot", integer: true  },
   wheatPerMill:      { label: "wheat per mill",       integer: true  },
   flourPerMill:      { label: "flour per mill",       integer: true  },
   roughFlourPrice:   { label: "rough flour price ($)", integer: true },
+  startingMoney:     { label: "starting money ($)",   integer: true, internal: true },
+  bonusTurnLimit:    { label: "bonus turns",          integer: true, internal: true },
+  itemCapBonus:      { label: "bonus storage",        integer: true, internal: true },
 };
 
 // =============================================================================
@@ -242,5 +251,135 @@ const UPGRADES = [
     maxLevel: 10,
     costGrowth: 1.3,
     effects: { roughFlourPrice: 1 },
+  },
+
+  // --- Storage — raise the stockpile cap for EVERY item (flat +storage) -------
+  // These add a flat amount to itemCapBonus, so the shared per-item cap goes up
+  // for wheat, rough flour and any future item alike. (Reset on retirement; the
+  // permanent Deep Silos upgrade in the Retirement Shop stacks on top.)
+  {
+    id: "store_granary",
+    name: "Granary",
+    category: "Storage",
+    desc: "A proper granary. +100 storage for every resource.",
+    cost: { money: 200 },
+    effects: { itemCapBonus: 100 },
+  },
+  {
+    id: "store_warehouse",
+    name: "Warehouse",
+    category: "Storage",
+    desc: "A dedicated warehouse. +200 storage for every resource.",
+    cost: { money: 800 },
+    requires: ["store_granary"],
+    effects: { itemCapBonus: 200 },
+  },
+  {
+    id: "store_grain_elevator",
+    name: "Grain Elevator",
+    category: "Storage",
+    desc: "Tower storage on a whole new scale. +500 storage for every resource.",
+    cost: { money: 2500, wheat: 150 },
+    requires: ["store_warehouse"],
+    effects: { itemCapBonus: 500 },
+  },
+  {
+    id: "store_extra_bins",
+    name: "Extra Bins",
+    category: "Storage",
+    desc: "Bolt on more storage bins whenever you like. +150 storage each. Buy again and again.",
+    cost: { money: 500 },
+    requires: ["store_granary"],
+    repeatable: true,
+    maxLevel: 20,
+    costGrowth: 1.25,
+    effects: { itemCapBonus: 150 },
+  },
+];
+
+// =============================================================================
+// PERMANENT UPGRADES — the Retirement Shop.
+// =============================================================================
+// Bought with Retirement Points (RP) instead of money/wheat. Unlike the regular
+// upgrades above, these PERSIST through retirement: they, your RP, and nothing
+// else survive a reset. They feed the exact same stats as normal upgrades (so
+// they flow through production automatically), plus the three prestige-only
+// stats declared in BASE_STATS above.
+//
+//   cost       (required)  a number = how many RP the next level costs.
+//   effects    (required)  same shape as regular upgrades.
+//   repeatable / maxLevel / costGrowth  — as above; costGrowth scales the RP
+//                                          cost per level (default 1.5).
+// =============================================================================
+const PERMANENT_UPGRADES = [
+  {
+    id: "perm_heirloom_seeds",
+    name: "Heirloom Seeds",
+    desc: "Generations of careful selection. Every farmer harvests more, forever.",
+    cost: 2,
+    repeatable: true,
+    maxLevel: 20,
+    costGrowth: 1.5,
+    effects: { wheatPerFarmer: 3 },
+  },
+  {
+    id: "perm_family_mill",
+    name: "Family Milling Tradition",
+    desc: "A milling dynasty. Every mill grinds out more flour per load, forever.",
+    cost: 3,
+    repeatable: true,
+    maxLevel: 15,
+    costGrowth: 1.5,
+    effects: { flourPerMill: 3 },
+  },
+  {
+    id: "perm_merchant_ties",
+    name: "Merchant Ties",
+    desc: "Old trade connections. Rough flour always sells for a little more.",
+    cost: 3,
+    repeatable: true,
+    maxLevel: 15,
+    costGrowth: 1.5,
+    effects: { roughFlourPrice: 1 },
+  },
+  {
+    id: "perm_big_family",
+    name: "Big Family",
+    desc: "More hands at home — fit another farmer on every plot from the very start.",
+    cost: 8,
+    repeatable: true,
+    maxLevel: 4,
+    costGrowth: 2,
+    effects: { maxFarmersPerPlot: 1 },
+  },
+  {
+    id: "perm_nest_egg",
+    name: "Nest Egg",
+    desc: "Start every new run with money already in the bank.",
+    cost: 4,
+    repeatable: true,
+    maxLevel: 20,
+    costGrowth: 1.4,
+    effects: { startingMoney: 100 },
+  },
+  {
+    id: "perm_late_career",
+    name: "Late Career",
+    desc: "Push retirement back — more turns each run before you must retire.",
+    cost: 6,
+    repeatable: true,
+    maxLevel: 20,
+    costGrowth: 1.5,
+    effects: { bonusTurnLimit: 5 },
+  },
+  {
+    id: "perm_deep_silos",
+    name: "Deep Silos",
+    desc: "Bigger permanent storage for every resource, run after run.",
+    cost: 5,
+    repeatable: true,
+    maxLevel: 20,
+    costGrowth: 1.4,
+    effects: { itemCapBonus: 50 },
   },
 ];

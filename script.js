@@ -93,6 +93,11 @@ const game = {
   buildings: [],          // instances: { uid, type, assigned:{worker:n}, player:bool }
   nextBuildingUid: 1,
   upgrades: {},           // purchased upgrades: id -> level (1 for one-time buys)
+  // --- Prestige. These three survive retirement; everything above resets. ---
+  retirementPoints: 0,    // RP: bought in the RP Shop, spent in the Retirement Shop
+  hasRetired: false,      // true once the player has retired at least once
+  permanentUpgrades: {},  // permanent upgrade id -> level (bought with RP)
+  rpBoughtThisRun: 0,     // RP bought this run; drives RP Shop prices, resets on retire
 };
 
 // Create a building instance and add it to the world.
@@ -139,7 +144,9 @@ const workerCost = (type) => scaledCost(WORKERS[type], game.workers[type] || 0);
 // that data — you shouldn't need to edit it to add upgrades.
 
 const upgradeLevel = (id) => game.upgrades[id] || 0;
+const permUpgradeLevel = (id) => game.permanentUpgrades[id] || 0;
 const findUpgrade = (id) => UPGRADES.find((u) => u.id === id);
+const findPermUpgrade = (id) => PERMANENT_UPGRADES.find((u) => u.id === id);
 const upgradeMaxLevel = (up) => (up.repeatable ? (up.maxLevel ?? Infinity) : 1);
 
 // Turn an effect entry into { add, mult }. A bare number means "add".
@@ -158,15 +165,21 @@ function deriveStats() {
   if (cachedStats) return cachedStats;
   const stats = { ...BASE_STATS };
   const mults = {};
-  for (const up of UPGRADES) {
-    const level = upgradeLevel(up.id);
-    if (level <= 0) continue;
-    for (const [stat, mod] of Object.entries(up.effects || {})) {
-      const { add, mult } = normalizeMod(mod);
-      if (add) stats[stat] = (stats[stat] ?? 0) + add * level;
-      if (mult) mults[stat] = (mults[stat] ?? 1) * Math.pow(mult, level);
+  // Regular (run) upgrades and permanent (prestige) upgrades feed the same
+  // stats — permanent ones just come from a separate, retirement-proof store.
+  const applyUpgrades = (list, levelOf) => {
+    for (const up of list) {
+      const level = levelOf(up.id);
+      if (level <= 0) continue;
+      for (const [stat, mod] of Object.entries(up.effects || {})) {
+        const { add, mult } = normalizeMod(mod);
+        if (add) stats[stat] = (stats[stat] ?? 0) + add * level;
+        if (mult) mults[stat] = (mults[stat] ?? 1) * Math.pow(mult, level);
+      }
     }
-  }
+  };
+  applyUpgrades(UPGRADES, upgradeLevel);
+  applyUpgrades(PERMANENT_UPGRADES, permUpgradeLevel);
   for (const [stat, m] of Object.entries(mults)) stats[stat] = (stats[stat] ?? 0) * m;
   cachedStats = stats;
   return stats;
@@ -195,6 +208,145 @@ function buyUpgrade(id) {
   pay(upgradeCost(up));
   game.upgrades[id] = upgradeLevel(id) + 1;
   invalidateStats();
+  render();
+}
+
+// --- Prestige: Retirement Points, permanent upgrades, and retiring ----------
+// The prestige loop: play a run, at (or after) the turn limit trade your leftover
+// resources for Retirement Points in the RP Shop, then Retire to reset the farm.
+// RP and everything bought with it (permanent upgrades) survive the reset.
+
+// --- RP Shop pricing --------------------------------------------------------
+// The price of the NEXT Retirement Point rises steeply as you buy more RP THIS
+// RUN. That "bought this run" counter (game.rpBoughtThisRun) resets to 0 on every
+// retirement, so prices climb hard within a run but start cheap again next time.
+//
+// Each resource declares a `cost`, which is EITHER:
+//   • a full manual price curve as a plain array — one entry per RP, in order:
+//         cost: [50, 150, 500, 1200, 3000, 6000, 10000]
+//     entry 0 is the 1st RP of the run, entry 1 the 2nd, and so on. Once you buy
+//     past the end of the array, the last entry's price simply holds. Just paste
+//     the numbers you want — no wrapper, no multiplier.
+//   • a function(n) — for anyone who'd rather compute it (n = RP already bought
+//     this run, 0-based). `tiered(prices, step)` builds one that reads from a
+//     table and then keeps climbing by `step` per RP beyond the table.
+//
+// Either way it's NOT limited to a single scaling multiplier — hand-tune freely.
+function tiered(prices, step = 0) {
+  return (n) => (n < prices.length
+    ? prices[n]
+    : prices[prices.length - 1] + step * (n - prices.length + 1));
+}
+
+const RP_EXCHANGE = {
+  money: {
+    label: "Money",
+    cost: [500, 1500, 4000, 9000, 20000, 40000, 75000, 130000, 220000],
+  },
+  wheat: {
+    label: "Wheat",
+    cost: [100, 150, 200],
+  },
+  roughFlour: {
+    label: "Rough Flour",
+    cost: [50, 90, 140, 200],
+  },
+};
+
+// Price the (n-th, 0-based) RP of the run bought with `resource`. Handles both
+// the array (full manual curve; last entry holds past the end) and function forms.
+function rpPriceAt(resource, n) {
+  const c = RP_EXCHANGE[resource].cost;
+  const raw = Array.isArray(c) ? c[Math.min(n, c.length - 1)] : c(n);
+  return Math.max(0, Math.ceil(raw || 0));
+}
+
+// Cost of the next RP bought with `resource`, at the current run's RP count.
+const rpCost = (resource) => rpPriceAt(resource, game.rpBoughtThisRun);
+
+// How many RP the given resource could buy right now, walking the escalating
+// price up from the current run count (every purchase makes the next dearer).
+function rpAffordable(resource) {
+  let bought = game.rpBoughtThisRun;
+  let bal = balance(resource);
+  let count = 0;
+  while (true) {
+    const c = rpPriceAt(resource, bought);
+    if (c <= 0 || bal < c) break;          // c<=0 guard also prevents infinite loops
+    bal -= c; bought += 1; count += 1;
+  }
+  return count;
+}
+
+// Buy Retirement Points by spending a resource. `count` is a number or "max".
+// Bought one at a time because each purchase raises the price of the next.
+function buyRP(resource, count) {
+  const want = count === "max" ? Infinity : count;
+  let bought = 0;
+  while (bought < want) {
+    const c = rpCost(resource);
+    if (c <= 0 || balance(resource) < c) break;
+    pay({ [resource]: c });
+    game.retirementPoints += 1;
+    game.rpBoughtThisRun += 1;
+    bought += 1;
+  }
+  if (bought > 0) render();
+}
+
+// Cost (in RP) of the next level of a permanent upgrade.
+function permUpgradeCost(up) {
+  if (!up.repeatable) return up.cost;
+  return Math.ceil(up.cost * Math.pow(up.costGrowth ?? 1.5, permUpgradeLevel(up.id)));
+}
+
+function canBuyPermUpgrade(up) {
+  return permUpgradeLevel(up.id) < upgradeMaxLevel(up)
+    && game.retirementPoints >= permUpgradeCost(up);
+}
+
+function buyPermUpgrade(id) {
+  const up = findPermUpgrade(id);
+  if (!up || !canBuyPermUpgrade(up)) return;
+  game.retirementPoints -= permUpgradeCost(up);
+  game.permanentUpgrades[id] = permUpgradeLevel(id) + 1;
+  invalidateStats();
+  applyPermanentBonuses(false); // storage/turn-limit bonuses take effect at once
+  render();
+}
+
+// Total stockpile cap: a base 200 plus the itemCapBonus stat, which is fed by
+// both permanent (Deep Silos) and regular (Warehouse) storage upgrades. Derived
+// live so warehouse upgrades bought mid-run take effect immediately.
+function refreshItemCap() {
+  game.itemCap = 200 + Math.floor(deriveStats().itemCapBonus || 0);
+}
+
+// Recompute the run-level values that permanent upgrades feed into. Called after
+// buying a permanent upgrade (money left alone) and at the start of a run, i.e.
+// on retire (money reset to the Nest Egg amount).
+function applyPermanentBonuses(setMoney) {
+  invalidateStats();
+  const stats = deriveStats();
+  refreshItemCap();
+  game.turnLimit = 80 + Math.floor(stats.bonusTurnLimit || 0);
+  if (setMoney) game.money = Math.floor(stats.startingMoney || 0);
+}
+
+// Retire: wipe the farm back to a fresh run, keeping only RP and permanent
+// upgrades. Permanent bonuses (starting money, extra turns, bigger storage) are
+// applied to the new run.
+function retire() {
+  game.turn = 1;
+  game.inventory = { wheat: 0, roughFlour: 0 };
+  game.workers = { farmer: 0, miller: 0 };
+  game.buildings = [];
+  game.nextBuildingUid = 1;
+  game.upgrades = {};
+  game.rpBoughtThisRun = 0; // RP Shop prices reset for the new run
+  game.hasRetired = true;
+  applyPermanentBonuses(true);
+  addBuilding("plot", { player: true }); // start again with one worked plot
   render();
 }
 
@@ -376,6 +528,17 @@ const workersListEl = document.getElementById("workers-list");
 const upgradesHeaderEl = document.getElementById("upgrades-header");
 const upgradesListEl = document.getElementById("upgrades-list");
 const inventoryListEl = document.getElementById("inventory-list");
+
+// Prestige DOM refs.
+const prestigeBarEl = document.getElementById("prestige-bar");
+const openRpShopBtn = document.getElementById("open-rp-shop");
+const openRetirementShopBtn = document.getElementById("open-retirement-shop");
+const retireBtn = document.getElementById("retire-btn");
+const rpBalanceShopEl = document.getElementById("rp-balance-shop");
+const rpBalancePermEl = document.getElementById("rp-balance-perm");
+const rpShopListEl = document.getElementById("rp-shop-list");
+const permUpgradesListEl = document.getElementById("perm-upgrades-list");
+const retireModalEl = document.getElementById("retire-modal");
 
 // --- Rendering --------------------------------------------------------------
 
@@ -692,6 +855,7 @@ function upgradeCard(up) {
 function renderUpgrades() {
   const stats = deriveStats();
   upgradesHeaderEl.innerHTML = Object.keys(STAT_INFO)
+    .filter((stat) => !STAT_INFO[stat].internal)
     .map((stat) => `${(STAT_INFO[stat] || {}).label}: <b>${formatStat(stat, stats[stat] ?? 0)}</b>`)
     .join(" &nbsp;·&nbsp; ");
 
@@ -710,6 +874,85 @@ function renderUpgrades() {
     upgradesListEl.appendChild(heading);
     for (const up of list) upgradesListEl.appendChild(upgradeCard(up));
   }
+}
+
+// --- Prestige rendering -----------------------------------------------------
+
+// The prestige bar (below the title): shown at the turn limit, and always once
+// the player has retired at least once. The Retirement Shop button only appears
+// after the first retirement.
+function renderPrestigeBar() {
+  const show = game.hasRetired || game.turn >= game.turnLimit;
+  prestigeBarEl.classList.toggle("hidden", !show);
+  openRetirementShopBtn.classList.toggle("hidden", !game.hasRetired);
+}
+
+// Money reads with a leading $, everything else is a plain count.
+const resAmountLabel = (res, amt) => (res === "money" ? `$${amt}` : `${amt}`);
+
+// RP Shop: one card per resource, converting it into Retirement Points.
+function renderRPShop() {
+  rpBalanceShopEl.textContent = game.retirementPoints;
+  rpShopListEl.innerHTML = "";
+  for (const [res, def] of Object.entries(RP_EXCHANGE)) {
+    const have = balance(res);
+    const next = rpCost(res);
+    const max = rpAffordable(res);
+
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <div class="card-head">
+        <span class="card-name">${def.label}</span>
+        <span class="card-owned">You have: ${resAmountLabel(res, have)}</span>
+      </div>
+      <p class="card-desc">Next RP: ${resAmountLabel(res, next)} — price rises with each RP bought this run.</p>
+      <div class="btn-row">
+        <button class="buy-btn rp-buy1" ${max < 1 ? "disabled" : ""}>Buy 1 RP</button>
+        <button class="buy-btn rp-buymax" ${max < 1 ? "disabled" : ""}>Buy Max${max > 0 ? ` — +${max} RP` : ""}</button>
+      </div>
+    `;
+    card.querySelector(".rp-buy1").addEventListener("click", () => buyRP(res, 1));
+    card.querySelector(".rp-buymax").addEventListener("click", () => buyRP(res, "max"));
+    rpShopListEl.appendChild(card);
+  }
+}
+
+// A permanent-upgrade card (RP-priced), mirroring the regular upgrade card.
+function permUpgradeCard(up) {
+  const level = permUpgradeLevel(up.id);
+  const maxed = level >= upgradeMaxLevel(up);
+  const cost = permUpgradeCost(up);
+  const affordable = game.retirementPoints >= cost;
+
+  const card = document.createElement("div");
+  card.className = "card upgrade" + (maxed ? " owned" : "");
+
+  const levelTag = up.repeatable
+    ? ` <span class="lvl">Lv ${level}${up.maxLevel ? "/" + up.maxLevel : ""}</span>`
+    : (level > 0 ? ` <span class="lvl">✓</span>` : "");
+
+  const action = maxed
+    ? `<span class="owned-tag">${up.repeatable ? "Maxed" : "Owned"}</span>`
+    : `<button class="buy-btn" ${affordable ? "" : "disabled"}>Buy — ${cost} RP</button>`;
+
+  card.innerHTML = `
+    <div class="card-head">
+      <span class="card-name">${up.name}${levelTag}</span>
+      <span class="card-owned">${effectLabel(up)}</span>
+    </div>
+    ${up.desc ? `<p class="card-desc">${up.desc}</p>` : ""}
+    <div class="btn-row">${action}</div>
+  `;
+  const btn = card.querySelector(".buy-btn");
+  if (btn) btn.addEventListener("click", () => buyPermUpgrade(up.id));
+  return card;
+}
+
+function renderRetirementShop() {
+  rpBalancePermEl.textContent = game.retirementPoints;
+  permUpgradesListEl.innerHTML = "";
+  for (const up of PERMANENT_UPGRADES) permUpgradesListEl.appendChild(permUpgradeCard(up));
 }
 
 function renderInventory() {
@@ -743,17 +986,52 @@ function renderInventory() {
 }
 
 function render() {
+  refreshItemCap();
   renderStats();
   renderBuildingsShop();
   renderOwned();
   renderWorkers();
   renderUpgrades();
   renderInventory();
+  renderPrestigeBar();
+  renderRPShop();
+  renderRetirementShop();
 }
 
 // --- Wiring -----------------------------------------------------------------
 
 passTurnBtn.addEventListener("click", passTurn);
+
+// --- Prestige wiring: overlays and the retire confirmation ------------------
+
+function closeScreens() {
+  document.querySelectorAll(".screen").forEach((s) => s.classList.add("hidden"));
+}
+
+openRpShopBtn.addEventListener("click", () => {
+  closeScreens();
+  document.getElementById("screen-rp-shop").classList.remove("hidden");
+  render();
+});
+
+openRetirementShopBtn.addEventListener("click", () => {
+  closeScreens();
+  document.getElementById("screen-retirement-shop").classList.remove("hidden");
+  render();
+});
+
+document.querySelectorAll("[data-close-screen]").forEach((btn) => {
+  btn.addEventListener("click", closeScreens);
+});
+
+retireBtn.addEventListener("click", () => retireModalEl.classList.remove("hidden"));
+document.getElementById("retire-cancel")
+  .addEventListener("click", () => retireModalEl.classList.add("hidden"));
+document.getElementById("retire-confirm").addEventListener("click", () => {
+  retireModalEl.classList.add("hidden");
+  closeScreens();
+  retire();
+});
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -768,10 +1046,11 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 // Expose the core API for the console and future systems.
 window.wheatGame = {
   state: game,
-  ITEMS, BUILDINGS, WORKERS, UPGRADES,
+  ITEMS, BUILDINGS, WORKERS, UPGRADES, PERMANENT_UPGRADES, RP_EXCHANGE,
   passTurn, buyBuilding, hireWorker, assignWorker, setPlayerAt, sell, sellPrice,
   addBuilding, increaseTurnLimit, production, idleWorkers,
   buyUpgrade, deriveStats, plotCapacity, instanceCapacity, instanceRates,
+  buyRP, rpCost, rpAffordable, buyPermUpgrade, retire, permUpgradeLevel,
 };
 
 render();
