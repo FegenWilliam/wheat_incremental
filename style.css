@@ -167,6 +167,33 @@ h1 {
 }
 .idle-line b { color: var(--money); }
 
+/* Sub-tabs inside the Owned panel: Plots | Buildings */
+.owned-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.owned-tab-btn {
+  flex: 1;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.5rem;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.owned-tab-btn:hover { color: var(--text); }
+
+.owned-tab-btn.active {
+  color: var(--wheat);
+  border-color: rgba(227, 176, 75, 0.4);
+}
+
 .assign-line {
   display: flex;
   align-items: center;
@@ -202,6 +229,8 @@ h1 {
   color: var(--muted);
   white-space: nowrap;
 }
+
+.card-owned.warn { color: var(--full); }
 
 .card-desc {
   font-size: 0.9rem;
