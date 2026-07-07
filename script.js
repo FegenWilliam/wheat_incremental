@@ -221,15 +221,17 @@ function buyUpgrade(id) {
 // RUN. That "bought this run" counter (game.rpBoughtThisRun) resets to 0 on every
 // retirement, so prices climb hard within a run but start cheap again next time.
 //
-// Each resource declares `cost(n)`: given how many RP you've already bought this
-// run (n, 0-based — n=0 is the first RP of the run), it returns the resource
-// amount the next RP costs. It's a plain function on purpose, so the curve is
-// fully editable and NOT limited to a single scaling multiplier — use a lookup
-// table, a tiered schedule, a polynomial, piecewise steps, anything.
+// Each resource declares a `cost`, which is EITHER:
+//   • a full manual price curve as a plain array — one entry per RP, in order:
+//         cost: [50, 150, 500, 1200, 3000, 6000, 10000]
+//     entry 0 is the 1st RP of the run, entry 1 the 2nd, and so on. Once you buy
+//     past the end of the array, the last entry's price simply holds. Just paste
+//     the numbers you want — no wrapper, no multiplier.
+//   • a function(n) — for anyone who'd rather compute it (n = RP already bought
+//     this run, 0-based). `tiered(prices, step)` builds one that reads from a
+//     table and then keeps climbing by `step` per RP beyond the table.
 //
-// `tiered(prices, step)` is a convenience for the common case: hand-pick a price
-// for each of the first RP purchases, then add `step` per RP beyond the table.
-// (Prices are just examples — tune them freely.)
+// Either way it's NOT limited to a single scaling multiplier — hand-tune freely.
 function tiered(prices, step = 0) {
   return (n) => (n < prices.length
     ? prices[n]
@@ -239,20 +241,28 @@ function tiered(prices, step = 0) {
 const RP_EXCHANGE = {
   money: {
     label: "Money",
-    cost: tiered([500, 1500, 4000, 9000, 20000], 20000),
+    cost: [500, 1500, 4000, 9000, 20000, 40000, 75000, 130000, 220000],
   },
   wheat: {
     label: "Wheat",
-    cost: tiered([100, 150, 200], 50),
+    cost: [100, 150, 200],
   },
   roughFlour: {
     label: "Rough Flour",
-    cost: tiered([50, 90, 140, 200], 60),
+    cost: [50, 90, 140, 200],
   },
 };
 
+// Price the (n-th, 0-based) RP of the run bought with `resource`. Handles both
+// the array (full manual curve; last entry holds past the end) and function forms.
+function rpPriceAt(resource, n) {
+  const c = RP_EXCHANGE[resource].cost;
+  const raw = Array.isArray(c) ? c[Math.min(n, c.length - 1)] : c(n);
+  return Math.max(0, Math.ceil(raw || 0));
+}
+
 // Cost of the next RP bought with `resource`, at the current run's RP count.
-const rpCost = (resource) => Math.max(0, Math.ceil(RP_EXCHANGE[resource].cost(game.rpBoughtThisRun)));
+const rpCost = (resource) => rpPriceAt(resource, game.rpBoughtThisRun);
 
 // How many RP the given resource could buy right now, walking the escalating
 // price up from the current run count (every purchase makes the next dearer).
@@ -261,7 +271,7 @@ function rpAffordable(resource) {
   let bal = balance(resource);
   let count = 0;
   while (true) {
-    const c = Math.max(0, Math.ceil(RP_EXCHANGE[resource].cost(bought)));
+    const c = rpPriceAt(resource, bought);
     if (c <= 0 || bal < c) break;          // c<=0 guard also prevents infinite loops
     bal -= c; bought += 1; count += 1;
   }
@@ -305,13 +315,20 @@ function buyPermUpgrade(id) {
   render();
 }
 
+// Total stockpile cap: a base 200 plus the itemCapBonus stat, which is fed by
+// both permanent (Deep Silos) and regular (Warehouse) storage upgrades. Derived
+// live so warehouse upgrades bought mid-run take effect immediately.
+function refreshItemCap() {
+  game.itemCap = 200 + Math.floor(deriveStats().itemCapBonus || 0);
+}
+
 // Recompute the run-level values that permanent upgrades feed into. Called after
 // buying a permanent upgrade (money left alone) and at the start of a run, i.e.
 // on retire (money reset to the Nest Egg amount).
 function applyPermanentBonuses(setMoney) {
   invalidateStats();
   const stats = deriveStats();
-  game.itemCap = 200 + Math.floor(stats.itemCapBonus || 0);
+  refreshItemCap();
   game.turnLimit = 80 + Math.floor(stats.bonusTurnLimit || 0);
   if (setMoney) game.money = Math.floor(stats.startingMoney || 0);
 }
@@ -969,6 +986,7 @@ function renderInventory() {
 }
 
 function render() {
+  refreshItemCap();
   renderStats();
   renderBuildingsShop();
   renderOwned();

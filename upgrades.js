@@ -252,6 +252,49 @@ const UPGRADES = [
     costGrowth: 1.3,
     effects: { roughFlourPrice: 1 },
   },
+
+  // --- Storage — raise the stockpile cap for EVERY item (flat +storage) -------
+  // These add a flat amount to itemCapBonus, so the shared per-item cap goes up
+  // for wheat, rough flour and any future item alike. (Reset on retirement; the
+  // permanent Deep Silos upgrade in the Retirement Shop stacks on top.)
+  {
+    id: "store_granary",
+    name: "Granary",
+    category: "Storage",
+    desc: "A proper granary. +100 storage for every resource.",
+    cost: { money: 200 },
+    effects: { itemCapBonus: 100 },
+  },
+  {
+    id: "store_warehouse",
+    name: "Warehouse",
+    category: "Storage",
+    desc: "A dedicated warehouse. +200 storage for every resource.",
+    cost: { money: 800 },
+    requires: ["store_granary"],
+    effects: { itemCapBonus: 200 },
+  },
+  {
+    id: "store_grain_elevator",
+    name: "Grain Elevator",
+    category: "Storage",
+    desc: "Tower storage on a whole new scale. +500 storage for every resource.",
+    cost: { money: 2500, wheat: 150 },
+    requires: ["store_warehouse"],
+    effects: { itemCapBonus: 500 },
+  },
+  {
+    id: "store_extra_bins",
+    name: "Extra Bins",
+    category: "Storage",
+    desc: "Bolt on more storage bins whenever you like. +150 storage each. Buy again and again.",
+    cost: { money: 500 },
+    requires: ["store_granary"],
+    repeatable: true,
+    maxLevel: 20,
+    costGrowth: 1.25,
+    effects: { itemCapBonus: 150 },
+  },
 ];
 
 // =============================================================================
