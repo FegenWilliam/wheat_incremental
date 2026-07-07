@@ -97,6 +97,7 @@ const game = {
   retirementPoints: 0,    // RP: bought in the RP Shop, spent in the Retirement Shop
   hasRetired: false,      // true once the player has retired at least once
   permanentUpgrades: {},  // permanent upgrade id -> level (bought with RP)
+  rpBoughtThisRun: 0,     // RP bought this run; drives RP Shop prices, resets on retire
 };
 
 // Create a building instance and add it to the world.
@@ -215,26 +216,72 @@ function buyUpgrade(id) {
 // resources for Retirement Points in the RP Shop, then Retire to reset the farm.
 // RP and everything bought with it (permanent upgrades) survive the reset.
 
-// The RP Shop exchange rates. Each entry is how much of a resource buys ONE RP.
-// (Wheat/flour are capped by storage, so they're cheap; money is the workhorse.)
+// --- RP Shop pricing --------------------------------------------------------
+// The price of the NEXT Retirement Point rises steeply as you buy more RP THIS
+// RUN. That "bought this run" counter (game.rpBoughtThisRun) resets to 0 on every
+// retirement, so prices climb hard within a run but start cheap again next time.
+//
+// Each resource declares `cost(n)`: given how many RP you've already bought this
+// run (n, 0-based — n=0 is the first RP of the run), it returns the resource
+// amount the next RP costs. It's a plain function on purpose, so the curve is
+// fully editable and NOT limited to a single scaling multiplier — use a lookup
+// table, a tiered schedule, a polynomial, piecewise steps, anything.
+//
+// `tiered(prices, step)` is a convenience for the common case: hand-pick a price
+// for each of the first RP purchases, then add `step` per RP beyond the table.
+// (Prices are just examples — tune them freely.)
+function tiered(prices, step = 0) {
+  return (n) => (n < prices.length
+    ? prices[n]
+    : prices[prices.length - 1] + step * (n - prices.length + 1));
+}
+
 const RP_EXCHANGE = {
-  money:      { label: "Money",       perRP: 500 },
-  wheat:      { label: "Wheat",       perRP: 100 },
-  roughFlour: { label: "Rough Flour", perRP: 50  },
+  money: {
+    label: "Money",
+    cost: tiered([500, 1500, 4000, 9000, 20000], 20000),
+  },
+  wheat: {
+    label: "Wheat",
+    cost: tiered([100, 150, 200], 50),
+  },
+  roughFlour: {
+    label: "Rough Flour",
+    cost: tiered([50, 90, 140, 200], 60),
+  },
 };
 
-// How many RP the given resource balance could buy right now.
-const rpAffordable = (res) => Math.floor(balance(res) / RP_EXCHANGE[res].perRP);
+// Cost of the next RP bought with `resource`, at the current run's RP count.
+const rpCost = (resource) => Math.max(0, Math.ceil(RP_EXCHANGE[resource].cost(game.rpBoughtThisRun)));
+
+// How many RP the given resource could buy right now, walking the escalating
+// price up from the current run count (every purchase makes the next dearer).
+function rpAffordable(resource) {
+  let bought = game.rpBoughtThisRun;
+  let bal = balance(resource);
+  let count = 0;
+  while (true) {
+    const c = Math.max(0, Math.ceil(RP_EXCHANGE[resource].cost(bought)));
+    if (c <= 0 || bal < c) break;          // c<=0 guard also prevents infinite loops
+    bal -= c; bought += 1; count += 1;
+  }
+  return count;
+}
 
 // Buy Retirement Points by spending a resource. `count` is a number or "max".
+// Bought one at a time because each purchase raises the price of the next.
 function buyRP(resource, count) {
-  const per = RP_EXCHANGE[resource].perRP;
-  const max = rpAffordable(resource);
-  const n = count === "max" ? max : Math.min(count, max);
-  if (n <= 0) return;
-  pay({ [resource]: per * n });
-  game.retirementPoints += n;
-  render();
+  const want = count === "max" ? Infinity : count;
+  let bought = 0;
+  while (bought < want) {
+    const c = rpCost(resource);
+    if (c <= 0 || balance(resource) < c) break;
+    pay({ [resource]: c });
+    game.retirementPoints += 1;
+    game.rpBoughtThisRun += 1;
+    bought += 1;
+  }
+  if (bought > 0) render();
 }
 
 // Cost (in RP) of the next level of a permanent upgrade.
@@ -279,6 +326,7 @@ function retire() {
   game.buildings = [];
   game.nextBuildingUid = 1;
   game.upgrades = {};
+  game.rpBoughtThisRun = 0; // RP Shop prices reset for the new run
   game.hasRetired = true;
   applyPermanentBonuses(true);
   addBuilding("plot", { player: true }); // start again with one worked plot
@@ -831,6 +879,7 @@ function renderRPShop() {
   rpShopListEl.innerHTML = "";
   for (const [res, def] of Object.entries(RP_EXCHANGE)) {
     const have = balance(res);
+    const next = rpCost(res);
     const max = rpAffordable(res);
 
     const card = document.createElement("div");
@@ -840,7 +889,7 @@ function renderRPShop() {
         <span class="card-name">${def.label}</span>
         <span class="card-owned">You have: ${resAmountLabel(res, have)}</span>
       </div>
-      <p class="card-desc">${resAmountLabel(res, def.perRP)} → 1 RP</p>
+      <p class="card-desc">Next RP: ${resAmountLabel(res, next)} — price rises with each RP bought this run.</p>
       <div class="btn-row">
         <button class="buy-btn rp-buy1" ${max < 1 ? "disabled" : ""}>Buy 1 RP</button>
         <button class="buy-btn rp-buymax" ${max < 1 ? "disabled" : ""}>Buy Max${max > 0 ? ` — +${max} RP` : ""}</button>
@@ -983,7 +1032,7 @@ window.wheatGame = {
   passTurn, buyBuilding, hireWorker, assignWorker, setPlayerAt, sell, sellPrice,
   addBuilding, increaseTurnLimit, production, idleWorkers,
   buyUpgrade, deriveStats, plotCapacity, instanceCapacity, instanceRates,
-  buyRP, buyPermUpgrade, retire, permUpgradeLevel,
+  buyRP, rpCost, rpAffordable, buyPermUpgrade, retire, permUpgradeLevel,
 };
 
 render();
