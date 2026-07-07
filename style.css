@@ -203,6 +203,8 @@ h1 {
   white-space: nowrap;
 }
 
+.card-owned.warn { color: var(--full); }
+
 .card-desc {
   font-size: 0.9rem;
   color: var(--muted);

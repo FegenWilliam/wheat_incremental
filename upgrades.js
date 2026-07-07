@@ -34,16 +34,26 @@
 // ---- Stats you can modify ---------------------------------------------------
 //   wheatPerFarmer     base 10  — wheat each farmer makes per plot, per turn.
 //   maxFarmersPerPlot  base 1   — how many farmers can work one plot at once.
+//   wheatPerMill       base 20  — wheat one miller feeds into a mill, per turn.
+//   flourPerMill       base 10  — rough flour one miller mills, per turn.
+//   maxMillersPerMill  base 1   — how many millers can work one mill at once.
+//
+// The mill's 2:1 ratio is just wheatPerMill / flourPerMill, and its throughput
+// is those two numbers — so upgrades can retune the rate OR the ratio by nudging
+// either stat. (Rough flour's sell price lives in SELL_PRICES in script.js.)
 //
 // Want a brand-new stat? Add it to BASE_STATS and STAT_INFO just below, then any
 // upgrade can target it. (Making it actually *do* something in production lives
-// in script.js's instanceOutput — but the two stats above are already wired.)
+// in script.js's instanceRates — but the stats above are already wired.)
 // =============================================================================
 
 // Base value of every derived stat, before any upgrades are bought.
 const BASE_STATS = {
   wheatPerFarmer: 10,
   maxFarmersPerPlot: 1,
+  wheatPerMill: 20,
+  flourPerMill: 10,
+  maxMillersPerMill: 1,
 };
 
 // How each stat reads on cards / in the header. `integer: true` rounds down for
@@ -51,6 +61,9 @@ const BASE_STATS = {
 const STAT_INFO = {
   wheatPerFarmer:    { label: "wheat per farmer",     integer: false },
   maxFarmersPerPlot: { label: "max farmers per plot", integer: true  },
+  wheatPerMill:      { label: "wheat per mill",       integer: false },
+  flourPerMill:      { label: "flour per mill",       integer: false },
+  maxMillersPerMill: { label: "max millers per mill", integer: true  },
 };
 
 // =============================================================================

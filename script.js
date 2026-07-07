@@ -9,16 +9,23 @@
 // separate currency (uncapped), handled below — it is not an item.
 const ITEMS = {
   wheat: { name: "Wheat" },
+  roughFlour: { name: "Rough Flour" },
 };
 
 // What each item sells for, in dollars.
 const SELL_PRICES = {
   wheat: 1,
+  roughFlour: 4,
 };
 
 // Building TYPES. Each owned building is an instance of one of these.
-//   worker  — the worker type this building needs to run (one type for now).
-//   produces — output per turn when the building is "running".
+//   worker       — the worker type this building needs to run (one type each).
+//   produces     — output per turn, per working worker.
+//   consumes     — input per turn, per working worker (processors only).
+//   capacityStat — stat that caps how many workers can work one instance.
+//   rateStats    — per-resource: which stat drives that resource's per-worker
+//                  rate (so upgrades retune throughput). Falls back to the base
+//                  number in produces/consumes when a resource isn't listed.
 //   cost/costGrowth — buy price, scaling with how many of this type you own.
 const BUILDINGS = {
   plot: {
@@ -28,6 +35,19 @@ const BUILDINGS = {
     costGrowth: 1.15,
     produces: { wheat: 10 },
     worker: "farmer",
+    capacityStat: "maxFarmersPerPlot",
+    rateStats: { wheat: "wheatPerFarmer" },
+  },
+  mill: {
+    name: "Mill",
+    desc: "Mills raw wheat into Rough Flour at a 2:1 ratio. Runs when a miller is assigned and there's enough wheat to feed it.",
+    cost: { money: 150 },
+    costGrowth: 1.15,
+    consumes: { wheat: 20 },
+    produces: { roughFlour: 10 },
+    worker: "miller",
+    capacityStat: "maxMillersPerMill",
+    rateStats: { wheat: "wheatPerMill", roughFlour: "flourPerMill" },
   },
 };
 
@@ -40,6 +60,12 @@ const WORKERS = {
     cost: { money: 25 },
     costGrowth: 1.15,
   },
+  miller: {
+    name: "Miller",
+    desc: "Works a mill, grinding wheat into rough flour. Assign millers on the Owned tab.",
+    cost: { money: 40 },
+    costGrowth: 1.15,
+  },
 };
 
 // --- Game state -------------------------------------------------------------
@@ -49,8 +75,8 @@ const game = {
   turnLimit: 80,
   itemCap: 200,           // per-item stockpile limit; same for every item
   money: 0,
-  inventory: { wheat: 0 },
-  workers: { farmer: 0 }, // hired (owned) pool per worker type
+  inventory: { wheat: 0, roughFlour: 0 },
+  workers: { farmer: 0, miller: 0 }, // hired (owned) pool per worker type
   buildings: [],          // instances: { uid, type, assigned:{worker:n}, player:bool }
   nextBuildingUid: 1,
   upgrades: {},           // purchased upgrades: id -> level (1 for one-time buys)
@@ -180,48 +206,83 @@ function instanceWorkerCount(inst) {
   return n;
 }
 
-// How many farmers can productively work one building at once (Coordination
-// upgrades raise this). Extra workers beyond the cap sit idle and add nothing.
+// How many workers can productively work one building instance at once. Driven
+// by the building's `capacityStat` (Coordination upgrades raise it); defaults to
+// 1. Extra workers beyond the cap sit idle and add nothing.
+function instanceCapacity(inst) {
+  const stat = BUILDINGS[inst.type].capacityStat;
+  const cap = stat ? deriveStats()[stat] : 1;
+  return Math.max(1, Math.floor(cap));
+}
+
+// Back-compat helper: capacity of a plot with no instance in hand.
 const plotCapacity = () => Math.max(1, Math.floor(deriveStats().maxFarmersPerPlot));
 
 // --- Production -------------------------------------------------------------
-// Output scales per farmer: each of the (capped) workers on a building produces
-// the building's base output, and for wheat that per-farmer amount is the
-// upgrade-driven `wheatPerFarmer` stat. So a plot with 2 farmers and a
-// wheatPerFarmer of 12 makes 24 wheat/turn. Change this function to add other
-// per-worker resources or building-specific rules.
-function instanceOutput(inst) {
+// Rates scale per worker: each of the (capped) workers on a building produces —
+// and, for processors like the mill, consumes — the building's per-worker rate.
+// A resource's per-worker amount comes from its `rateStats` stat when one is
+// declared (so upgrades retune it), else the base number in produces/consumes.
+// e.g. a plot with 2 farmers at wheatPerFarmer 12 makes 24 wheat/turn; a mill
+// with 1 miller consumes 20 wheat and makes 10 flour.
+function instanceRates(inst) {
   const def = BUILDINGS[inst.type];
   const stats = deriveStats();
-  const farmers = Math.min(instanceWorkerCount(inst), plotCapacity());
-  const out = {};
-  for (const [res, base] of Object.entries(def.produces || {})) {
-    const perFarmer = res === "wheat" ? stats.wheatPerFarmer : base;
-    out[res] = perFarmer * farmers;
-  }
-  return out;
+  const workers = Math.min(instanceWorkerCount(inst), instanceCapacity(inst));
+  const rate = (res, base) => {
+    const stat = def.rateStats && def.rateStats[res];
+    return (stat ? stats[stat] : base) * workers;
+  };
+  const produces = {};
+  const consumes = {};
+  for (const [res, base] of Object.entries(def.produces || {})) produces[res] = rate(res, base);
+  for (const [res, base] of Object.entries(def.consumes || {})) consumes[res] = rate(res, base);
+  return { produces, consumes, workers };
 }
 
-// Total per-turn production across every owned building, keyed by item.
+// Net nominal per-turn change across every owned building, keyed by item
+// (produced minus consumed, assuming every processor is fed). Used for the
+// "per turn" readouts — actual mill output at turn time is gated on real wheat.
 function production() {
   const out = {};
   for (const inst of game.buildings) {
-    for (const [res, amt] of Object.entries(instanceOutput(inst))) {
-      out[res] = (out[res] || 0) + amt;
-    }
+    const { produces, consumes } = instanceRates(inst);
+    for (const [res, amt] of Object.entries(produces)) out[res] = (out[res] || 0) + amt;
+    for (const [res, amt] of Object.entries(consumes)) out[res] = (out[res] || 0) - amt;
   }
   return out;
 }
 
 // --- Actions ----------------------------------------------------------------
 
+// Add an amount to a stockpiled item, clamped to [0, itemCap].
+function stock(res, amt) {
+  game.inventory[res] = Math.max(0, Math.min(game.itemCap, (game.inventory[res] || 0) + amt));
+}
+
 function passTurn() {
   if (game.turn >= game.turnLimit) return;
   game.turn += 1;
-  const prod = production();
-  for (const [res, amt] of Object.entries(prod)) {
-    game.inventory[res] = Math.min(game.itemCap, (game.inventory[res] || 0) + amt);
+
+  // Phase 1 — raw producers (no inputs) add their output to the stockpile.
+  for (const inst of game.buildings) {
+    if (BUILDINGS[inst.type].consumes) continue;
+    for (const [res, amt] of Object.entries(instanceRates(inst).produces)) stock(res, amt);
   }
+
+  // Phase 2 — processors (e.g. mills) consume from the stockpile and produce.
+  // A mill only runs if there's enough wheat for its full input this turn, so
+  // amounts stay whole; when several compete, earlier instances feed first.
+  for (const inst of game.buildings) {
+    const def = BUILDINGS[inst.type];
+    if (!def.consumes) continue;
+    const { produces, consumes } = instanceRates(inst);
+    const fed = Object.entries(consumes).every(([res, amt]) => (game.inventory[res] || 0) >= amt);
+    if (!fed) continue;
+    for (const [res, amt] of Object.entries(consumes)) stock(res, -amt);
+    for (const [res, amt] of Object.entries(produces)) stock(res, amt);
+  }
+
   render();
 }
 
@@ -247,8 +308,8 @@ function assignWorker(uid, workerType, delta) {
   if (!inst) return;
   const cur = inst.assigned[workerType] || 0;
   if (delta > 0) {
-    if (idleWorkers(workerType) <= 0) return;                 // none free to add
-    if (instanceWorkerCount(inst) >= plotCapacity()) return;  // plot already full
+    if (idleWorkers(workerType) <= 0) return;                     // none free to add
+    if (instanceWorkerCount(inst) >= instanceCapacity(inst)) return; // already full
   }
   inst.assigned[workerType] = Math.max(0, cur + delta);
   render();
@@ -338,7 +399,8 @@ function renderStats() {
   wheatAmountEl.textContent = wheat;
   wheatCapEl.textContent = game.itemCap;
   moneyAmountEl.textContent = game.money;
-  wheatPerTurnEl.textContent = prod.wheat || 0;
+  const netWheat = prod.wheat || 0;
+  wheatPerTurnEl.textContent = (netWheat >= 0 ? "+" : "−") + Math.abs(netWheat);
   wheatStatEl.classList.toggle("full", atCap);
 
   const atTurnLimit = game.turn >= game.turnLimit;
@@ -401,20 +463,29 @@ function renderOwned() {
     const wDef = WORKERS[wType];
     const assigned = inst.assigned[wType] || 0;
     const here = instanceWorkerCount(inst);
-    const cap = plotCapacity();
+    const cap = instanceCapacity(inst);
     const full = here >= cap;
-    const running = here >= 1;
-    const out = instanceOutput(inst);
-    const outLabel = Object.entries(out)
-      .map(([res, amt]) => `+${amt} ${ITEMS[res].name.toLowerCase()}`)
-      .join(", ");
+    const staffed = here >= 1;
+    const { produces, consumes } = instanceRates(inst);
+    // Staffed processor with too little input on hand right now is "starved".
+    const starved = staffed && Object.entries(consumes)
+      .some(([res, amt]) => (game.inventory[res] || 0) < amt);
+    const outLabel = [
+      ...Object.entries(consumes).map(([res, amt]) => `−${amt} ${ITEMS[res].name.toLowerCase()}`),
+      ...Object.entries(produces).map(([res, amt]) => `+${amt} ${ITEMS[res].name.toLowerCase()}`),
+    ].join(", ");
+
+    let status;
+    if (!staffed) status = "Idle — needs a worker";
+    else if (starved) status = `${outLabel}/turn — low on wheat`;
+    else status = outLabel + "/turn";
 
     const card = document.createElement("div");
     card.className = "card" + (inst.player ? " here" : "");
     card.innerHTML = `
       <div class="card-head">
         <span class="card-name">${def.name} #${instanceNumber(inst)}</span>
-        <span class="card-owned">${running ? outLabel + "/turn" : "Idle — needs a worker"}</span>
+        <span class="card-owned ${starved ? "warn" : ""}">${status}</span>
       </div>
       <div class="assign-line">
         <span class="row-label">${wDef.name}s:</span>
@@ -599,7 +670,7 @@ window.wheatGame = {
   ITEMS, BUILDINGS, WORKERS, UPGRADES,
   passTurn, buyBuilding, hireWorker, assignWorker, setPlayerAt, sell,
   addBuilding, increaseTurnLimit, production, idleWorkers,
-  buyUpgrade, deriveStats, plotCapacity,
+  buyUpgrade, deriveStats, plotCapacity, instanceCapacity, instanceRates,
 };
 
 render();
