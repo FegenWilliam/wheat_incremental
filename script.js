@@ -451,7 +451,116 @@ function renderBuildingsShop() {
   }
 }
 
-// Owned tab = manage each building instance individually.
+// Only plot-like buildings hold more than one worker — that's exactly the ones
+// with a `capacityStat` (a stat that can raise their worker cap). Everything
+// else is a fixed one-worker-per-building shop, now and in the future. The Owned
+// tab uses this split to pick the control style, so the player can *see* the
+// difference: plots get a farmer counter, other buildings get a simple toggle.
+const isMultiWorker = (type) => !!BUILDINGS[type].capacityStat;
+
+// Which Owned sub-tab is showing: "plots" (multi-worker) or "buildings" (single).
+let ownedTab = "plots";
+
+// Shared status line for a building instance: its per-turn output/consumption,
+// or why it's idle. `starved` = staffed but short on an input right now.
+function instanceStatus(inst) {
+  const { produces, consumes } = instanceRates(inst);
+  const staffed = instanceWorkerCount(inst) >= 1;
+  const starved = staffed && Object.entries(consumes)
+    .some(([res, amt]) => (game.inventory[res] || 0) < amt);
+  const outLabel = [
+    ...Object.entries(consumes).map(([res, amt]) => `−${amt} ${ITEMS[res].name.toLowerCase()}`),
+    ...Object.entries(produces).map(([res, amt]) => `+${amt} ${ITEMS[res].name.toLowerCase()}`),
+  ].join(", ");
+  let text;
+  if (!staffed) text = "Idle — needs a worker";
+  else if (starved) text = `${outLabel}/turn — low on wheat`;
+  else text = outLabel + "/turn";
+  return { text, starved };
+}
+
+// The "Work here / You: here" button, shared by both card styles.
+function playerButtonHTML(inst) {
+  return `<button class="mini-btn player-btn ${inst.player ? "active" : ""}">${inst.player ? "You: here" : "Work here"}</button>`;
+}
+
+function wirePlayerButton(card, inst) {
+  card.querySelector(".player-btn")
+    .addEventListener("click", () => setPlayerAt(inst.player ? null : inst.uid));
+}
+
+// Plot-style card: a farmer counter with a working/capacity note, because plots
+// can hold several farmers at once.
+function multiWorkerCard(inst) {
+  const def = BUILDINGS[inst.type];
+  const wType = def.worker;
+  const wDef = WORKERS[wType];
+  const assigned = inst.assigned[wType] || 0;
+  const here = instanceWorkerCount(inst);
+  const cap = instanceCapacity(inst);
+  const full = here >= cap;
+  const st = instanceStatus(inst);
+
+  const card = document.createElement("div");
+  card.className = "card" + (inst.player ? " here" : "");
+  card.innerHTML = `
+    <div class="card-head">
+      <span class="card-name">${def.name} #${instanceNumber(inst)}</span>
+      <span class="card-owned ${st.starved ? "warn" : ""}">${st.text}</span>
+    </div>
+    <div class="assign-line">
+      <span class="row-label">${wDef.name}s:</span>
+      <button class="mini-btn w-minus" ${assigned <= 0 ? "disabled" : ""}>&minus;</button>
+      <span class="badge">${assigned}</span>
+      <button class="mini-btn w-plus" ${idleWorkers(wType) <= 0 || full ? "disabled" : ""}>+</button>
+      <span class="cap-note">${here}/${cap} working</span>
+      <span class="spacer"></span>
+      ${playerButtonHTML(inst)}
+    </div>
+  `;
+  card.querySelector(".w-plus").addEventListener("click", () => assignWorker(inst.uid, wType, 1));
+  card.querySelector(".w-minus").addEventListener("click", () => assignWorker(inst.uid, wType, -1));
+  wirePlayerButton(card, inst);
+  return card;
+}
+
+// Single-worker card: one on/off toggle, because every non-plot building runs on
+// exactly one worker who does a flat one building's worth of work.
+function singleWorkerCard(inst) {
+  const def = BUILDINGS[inst.type];
+  const wType = def.worker;
+  const wDef = WORKERS[wType];
+  const on = (inst.assigned[wType] || 0) >= 1;
+  // Can only staff it if a worker is free AND the single slot isn't already
+  // taken (by another worker or by the player standing in).
+  const canAssign = idleWorkers(wType) > 0 && instanceWorkerCount(inst) < instanceCapacity(inst);
+  const st = instanceStatus(inst);
+
+  const toggle = on
+    ? `<button class="mini-btn worker-toggle active">✓ ${wDef.name} working</button>`
+    : `<button class="mini-btn worker-toggle" ${canAssign ? "" : "disabled"}>Assign ${wDef.name}</button>`;
+
+  const card = document.createElement("div");
+  card.className = "card" + (inst.player ? " here" : "");
+  card.innerHTML = `
+    <div class="card-head">
+      <span class="card-name">${def.name} #${instanceNumber(inst)}</span>
+      <span class="card-owned ${st.starved ? "warn" : ""}">${st.text}</span>
+    </div>
+    <div class="assign-line">
+      ${toggle}
+      <span class="spacer"></span>
+      ${playerButtonHTML(inst)}
+    </div>
+  `;
+  card.querySelector(".worker-toggle")
+    .addEventListener("click", () => assignWorker(inst.uid, wType, on ? -1 : 1));
+  wirePlayerButton(card, inst);
+  return card;
+}
+
+// Owned tab = manage each building instance individually, split into Plots
+// (multi-worker) and Buildings (one worker each).
 function renderOwned() {
   // Header: where the player is, plus idle workers available to assign.
   const idleBits = Object.entries(WORKERS)
@@ -466,60 +575,37 @@ function renderOwned() {
   const idleBtn = ownedHeaderEl.querySelector(".go-idle");
   if (idleBtn) idleBtn.addEventListener("click", () => setPlayerAt(null));
 
+  const plots = game.buildings.filter((b) => isMultiWorker(b.type));
+  const others = game.buildings.filter((b) => !isMultiWorker(b.type));
+  const groups = { plots, buildings: others };
+  const list = groups[ownedTab] || [];
+
   ownedListEl.innerHTML = "";
-  if (game.buildings.length === 0) {
-    ownedListEl.innerHTML = `<p class="card-desc">No buildings yet — buy one on the Buildings tab.</p>`;
+
+  // Sub-tab bar: Plots | Buildings, with live counts.
+  const bar = document.createElement("div");
+  bar.className = "owned-tabs";
+  bar.innerHTML = `
+    <button class="owned-tab-btn ${ownedTab === "plots" ? "active" : ""}" data-otab="plots">Plots (${plots.length})</button>
+    <button class="owned-tab-btn ${ownedTab === "buildings" ? "active" : ""}" data-otab="buildings">Buildings (${others.length})</button>
+  `;
+  bar.querySelectorAll(".owned-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => { ownedTab = btn.dataset.otab; render(); });
+  });
+  ownedListEl.appendChild(bar);
+
+  if (list.length === 0) {
+    const hint = document.createElement("p");
+    hint.className = "card-desc";
+    hint.textContent = ownedTab === "plots"
+      ? "No plots yet — buy one on the Buildings tab."
+      : "No other buildings yet — buy a Mill on the Buildings tab.";
+    ownedListEl.appendChild(hint);
     return;
   }
 
-  for (const inst of game.buildings) {
-    const def = BUILDINGS[inst.type];
-    const wType = def.worker;
-    const wDef = WORKERS[wType];
-    const assigned = inst.assigned[wType] || 0;
-    const here = instanceWorkerCount(inst);
-    const cap = instanceCapacity(inst);
-    const full = here >= cap;
-    const staffed = here >= 1;
-    const { produces, consumes } = instanceRates(inst);
-    // Staffed processor with too little input on hand right now is "starved".
-    const starved = staffed && Object.entries(consumes)
-      .some(([res, amt]) => (game.inventory[res] || 0) < amt);
-    const outLabel = [
-      ...Object.entries(consumes).map(([res, amt]) => `−${amt} ${ITEMS[res].name.toLowerCase()}`),
-      ...Object.entries(produces).map(([res, amt]) => `+${amt} ${ITEMS[res].name.toLowerCase()}`),
-    ].join(", ");
-
-    let status;
-    if (!staffed) status = "Idle — needs a worker";
-    else if (starved) status = `${outLabel}/turn — low on wheat`;
-    else status = outLabel + "/turn";
-
-    const card = document.createElement("div");
-    card.className = "card" + (inst.player ? " here" : "");
-    card.innerHTML = `
-      <div class="card-head">
-        <span class="card-name">${def.name} #${instanceNumber(inst)}</span>
-        <span class="card-owned ${starved ? "warn" : ""}">${status}</span>
-      </div>
-      <div class="assign-line">
-        <span class="row-label">${wDef.name}s:</span>
-        <button class="mini-btn w-minus" ${assigned <= 0 ? "disabled" : ""}>&minus;</button>
-        <span class="badge">${assigned}</span>
-        <button class="mini-btn w-plus" ${idleWorkers(wType) <= 0 || full ? "disabled" : ""}>+</button>
-        <span class="cap-note">${here}/${cap} working</span>
-        <span class="spacer"></span>
-        <button class="mini-btn player-btn ${inst.player ? "active" : ""}">
-          ${inst.player ? "You: here" : "Work here"}
-        </button>
-      </div>
-    `;
-    card.querySelector(".w-plus").addEventListener("click", () => assignWorker(inst.uid, wType, 1));
-    card.querySelector(".w-minus").addEventListener("click", () => assignWorker(inst.uid, wType, -1));
-    card.querySelector(".player-btn").addEventListener("click", () =>
-      setPlayerAt(inst.player ? null : inst.uid)
-    );
-    ownedListEl.appendChild(card);
+  for (const inst of list) {
+    ownedListEl.appendChild(isMultiWorker(inst.type) ? multiWorkerCard(inst) : singleWorkerCard(inst));
   }
 }
 
