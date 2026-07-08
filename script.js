@@ -435,6 +435,14 @@ const RP_EXCHANGE = {
     label: "Rough Flour",
     cost: [50, 90, 140, 200],
   },
+  wheatFlour: {
+    label: "Wheat Flour",
+    cost: [15, 50, 150, 400],
+  },
+  whiteFlour: {
+    label: "White Flour",
+    cost: [1, 5, 25, 100, 250, 400],
+  },
 };
 
 // Price the (n-th, 0-based) RP of the run bought with `resource`. Handles both
