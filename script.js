@@ -214,6 +214,62 @@ function addBuilding(type, { player = false } = {}) {
 // Start owning one Plot with the player already working it (10 wheat/turn).
 addBuilding("plot", { player: true });
 
+// --- Persistence ------------------------------------------------------------
+// The whole `game` object is the save. It's written to localStorage after every
+// render (i.e. after every action), so a browser refresh resumes exactly where
+// you left off. Loading copies only the keys `game` already declares, so an old
+// or hand-edited save can't inject unexpected fields.
+
+const SAVE_KEY = "wheatIncremental.save";
+
+function serializeGame() {
+  return JSON.stringify(game);
+}
+
+function saveGame() {
+  try {
+    localStorage.setItem(SAVE_KEY, serializeGame());
+  } catch (e) {
+    // Storage unavailable/full (private mode, quota) — play on without saving.
+  }
+}
+
+// Copy a parsed save into the live `game`. Returns false if it doesn't look like
+// a save. Only known keys are copied, and buildings must be an array, so a
+// malformed blob is rejected rather than corrupting the game.
+function applySave(saved) {
+  if (!saved || typeof saved !== "object" || !Array.isArray(saved.buildings)) return false;
+  for (const key of Object.keys(game)) {
+    if (saved[key] !== undefined) game[key] = saved[key];
+  }
+  invalidateStats();
+  return true;
+}
+
+function loadGame() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(SAVE_KEY);
+  } catch (e) {
+    return false;
+  }
+  if (!raw) return false;
+  try {
+    return applySave(JSON.parse(raw));
+  } catch (e) {
+    return false;
+  }
+}
+
+// Wipe the saved game and reload into a fresh one. Unlike Retire, this clears
+// everything — Retirement Points and permanent upgrades included.
+function hardReset() {
+  try {
+    localStorage.removeItem(SAVE_KEY);
+  } catch (e) { /* nothing to clear */ }
+  location.reload();
+}
+
 // --- Money / cost helpers ---------------------------------------------------
 
 function balance(res) {
@@ -1158,11 +1214,62 @@ function render() {
   renderPrestigeBar();
   renderRPShop();
   renderRetirementShop();
+  saveGame();
 }
 
 // --- Wiring -----------------------------------------------------------------
 
 passTurnBtn.addEventListener("click", passTurn);
+
+// --- Settings: export / import / reset --------------------------------------
+
+const saveBoxEl = document.getElementById("save-box");
+const settingsMsgEl = document.getElementById("settings-msg");
+const exportBtn = document.getElementById("export-btn");
+const importBtn = document.getElementById("import-btn");
+const resetInputEl = document.getElementById("reset-input");
+const resetBtn = document.getElementById("reset-btn");
+
+function settingsMsg(text, kind) {
+  settingsMsgEl.textContent = text;
+  settingsMsgEl.className = "settings-msg" + (kind ? " " + kind : "");
+}
+
+exportBtn.addEventListener("click", () => {
+  saveBoxEl.value = serializeGame();
+  saveBoxEl.focus();
+  saveBoxEl.select();
+  settingsMsg("Save code shown below — copy it somewhere safe.", "ok");
+});
+
+importBtn.addEventListener("click", () => {
+  const raw = saveBoxEl.value.trim();
+  if (!raw) { settingsMsg("Paste a save code into the box first.", "err"); return; }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    settingsMsg("That doesn't look like a valid save code.", "err");
+    return;
+  }
+  if (!applySave(parsed)) {
+    settingsMsg("That doesn't look like a valid save code.", "err");
+    return;
+  }
+  saveGame();
+  render();
+  settingsMsg("Save imported. Your farm has been loaded.", "ok");
+});
+
+// The Reset button stays disabled until the player types RESET (all caps).
+resetInputEl.addEventListener("input", () => {
+  resetBtn.disabled = resetInputEl.value !== "RESET";
+});
+
+resetBtn.addEventListener("click", () => {
+  if (resetInputEl.value !== "RESET") return; // guard against enabling by other means
+  hardReset();
+});
 
 // --- Prestige wiring: overlays and the retire confirmation ------------------
 
@@ -1213,6 +1320,11 @@ window.wheatGame = {
   addBuilding, increaseTurnLimit, production, idleWorkers,
   buyUpgrade, deriveStats, plotCapacity, instanceCapacity, instanceRates,
   buyRP, rpCost, rpAffordable, buyPermUpgrade, retire, permUpgradeLevel,
+  saveGame, loadGame, hardReset, serializeGame,
 };
+
+// Resume from a saved game if one exists (before the first render, so the UI
+// draws the restored state). A fresh browser just keeps the default new game.
+loadGame();
 
 render();

@@ -43,6 +43,7 @@
       <button class="tab-btn" data-tab="workers" type="button">Workers</button>
       <button class="tab-btn" data-tab="upgrades" type="button">Upgrades</button>
       <button class="tab-btn" data-tab="inventory" type="button">Inventory</button>
+      <button class="tab-btn" data-tab="settings" type="button">Settings</button>
     </nav>
 
     <section id="tab-buildings" class="tab-panel active">
@@ -65,6 +66,35 @@
 
     <section id="tab-inventory" class="tab-panel">
       <div id="inventory-list" class="card-list"></div>
+    </section>
+
+    <section id="tab-settings" class="tab-panel">
+      <div class="card-list">
+        <div class="card">
+          <div class="card-head">
+            <span class="card-name">Save Data</span>
+            <span class="card-owned" id="save-status">Auto-saving on</span>
+          </div>
+          <p class="card-desc">Your progress saves automatically in this browser after every action, so it survives a refresh. Use Export to back it up or move it to another browser, and Import to load a backup.</p>
+          <div class="btn-row">
+            <button id="export-btn" type="button" class="buy-btn">Export Save</button>
+            <button id="import-btn" type="button" class="mini-btn">Import Save</button>
+          </div>
+          <textarea id="save-box" class="save-box" spellcheck="false" placeholder="Click Export to show your save code here, or paste a save code and click Import."></textarea>
+          <p id="settings-msg" class="settings-msg"></p>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-name">Reset Everything</span>
+          </div>
+          <p class="card-desc">Wipes <b>all</b> progress in this browser — money, buildings, upgrades, Retirement Points and permanent upgrades — and starts a brand-new game. This cannot be undone. Type <b>RESET</b> below to enable the button.</p>
+          <div class="btn-row">
+            <input id="reset-input" type="text" class="reset-input" placeholder="Type RESET" autocomplete="off" spellcheck="false">
+            <button id="reset-btn" type="button" class="buy-btn danger" disabled>Reset Game</button>
+          </div>
+        </div>
+      </div>
     </section>
   </main>
 

@@ -464,6 +464,45 @@ h1 {
   margin-left: 0.2rem;
 }
 
+/* --- Settings tab --- */
+.save-box {
+  width: 100%;
+  min-height: 6rem;
+  margin-top: 0.75rem;
+  resize: vertical;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid rgba(227, 176, 75, 0.25);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  word-break: break-all;
+}
+.save-box:focus { outline: none; border-color: var(--wheat); }
+
+.settings-msg {
+  min-height: 1.2em;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.settings-msg.ok { color: var(--money); }
+.settings-msg.err { color: var(--full); }
+
+.reset-input {
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid rgba(224, 106, 75, 0.4);
+  border-radius: 7px;
+  padding: 0.5rem 0.8rem;
+}
+.reset-input:focus { outline: none; border-color: var(--full); }
+
 /* --- Inventory bars --- */
 .inv-amount { font-size: 0.9rem; color: var(--muted); }
 .inv-amount.full { color: var(--full); }
