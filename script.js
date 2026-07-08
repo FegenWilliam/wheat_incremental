@@ -16,15 +16,16 @@ const ITEMS = {
   whiteFlour: { name: "White Flour" },
 };
 
-// What each item sells for, in dollars. This is the base/fallback price; an
-// item listed in PRICE_STATS instead takes its price from that (upgradeable)
-// stat, so market upgrades can raise it.
-const SELL_PRICES = {
-  wheat: 1,
-};
+// What each item sells for, in dollars. This is the base/fallback price for
+// items with a fixed price; an item listed in PRICE_STATS instead takes its
+// price from that (upgradeable) stat, so market upgrades can raise it. Nothing
+// uses the flat table right now — every sellable item is upgrade-driven — but
+// it stays as the escape hatch for a future item that should never scale.
+const SELL_PRICES = {};
 
 // Items whose sell price is a derived stat (see BASE_STATS in upgrades.js).
 const PRICE_STATS = {
+  wheat: "wheatPrice",
   roughFlour: "roughFlourPrice",
   wheatFlour: "wheatFlourPrice",
   whiteFlour: "whiteFlourPrice",
