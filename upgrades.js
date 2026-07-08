@@ -112,6 +112,7 @@
 const BASE_STATS = {
   wheatPerFarmer: 10,
   maxFarmersPerPlot: 1,
+  wheatPrice: 1,            // dollars each wheat sells for.
   wheatPerMill: 20,
   flourPerMill: 10,
   roughFlourPrice: 4,
@@ -145,6 +146,7 @@ const BASE_STATS = {
 const STAT_INFO = {
   wheatPerFarmer:    { label: "wheat per farmer",     integer: false },
   maxFarmersPerPlot: { label: "max farmers per plot", integer: true  },
+  wheatPrice:        { label: "wheat price ($)",       integer: true },
   wheatPerMill:      { label: "wheat per mill",       integer: true  },
   flourPerMill:      { label: "flour per mill",       integer: true  },
   roughFlourPrice:   { label: "rough flour price ($)", integer: true },
