@@ -37,6 +37,9 @@
 //   wheatPerMill       base 20  — wheat one mill feeds in, per turn (the "rate").
 //   flourPerMill       base 10  — rough flour one mill grinds out, per turn.
 //   roughFlourPrice    base 4   — dollars each rough flour sells for.
+//   roughFlourPerSifter base 10 — rough flour one sifter feeds in, per turn.
+//   wheatFlourPerSifter base 7  — wheat flour one sifter sifts out, per turn.
+//   wheatFlourPrice    base 12  — dollars each wheat flour sells for.
 //
 // The mill's ratio is wheatPerMill : flourPerMill (base 20:10 = 2:1). To change:
 //   • RATE  — multiply BOTH stats by the same factor to scale throughput while
@@ -44,6 +47,14 @@
 //   • RATIO — add to flourPerMill alone to improve the yield (+2 → 20:12 = 10:6).
 //   • PRICE — add to roughFlourPrice (+2 → sells for $6).
 // (One mill = one miller; that cap is fixed in script.js, no stat for it.)
+//
+// The sifter works exactly the same way — ratio roughFlourPerSifter :
+// wheatFlourPerSifter (base 10:7). To change:
+//   • MAX CAPACITY — multiply BOTH sifter stats to scale how much it processes
+//                    while keeping the ratio (×2 → 20 rough in, 14 wheat out).
+//   • RATIO — add to wheatFlourPerSifter alone to improve the yield (+1 → 10:8).
+//   • PRICE — add to wheatFlourPrice (+2 → sells for $14).
+// (One sifter = one sifter worker; that cap is fixed in script.js.)
 //
 // Want a brand-new stat? Add it to BASE_STATS and STAT_INFO just below, then any
 // upgrade can target it. (Making it actually *do* something in production lives
@@ -57,6 +68,9 @@ const BASE_STATS = {
   wheatPerMill: 20,
   flourPerMill: 10,
   roughFlourPrice: 4,
+  roughFlourPerSifter: 10,  // rough flour one sifter feeds in, per turn (the "rate"/capacity).
+  wheatFlourPerSifter: 7,   // wheat flour one sifter sifts out, per turn.
+  wheatFlourPrice: 12,      // dollars each wheat flour sells for.
   // --- Prestige stats. Driven by PERMANENT_UPGRADES (bought with Retirement
   // Points) and applied at the start of each run — see script.js. ---
   startingMoney: 0,   // dollars in the bank at the start of every run
@@ -73,6 +87,9 @@ const STAT_INFO = {
   wheatPerMill:      { label: "wheat per mill",       integer: true  },
   flourPerMill:      { label: "flour per mill",       integer: true  },
   roughFlourPrice:   { label: "rough flour price ($)", integer: true },
+  roughFlourPerSifter: { label: "rough flour per sifter", integer: true },
+  wheatFlourPerSifter: { label: "wheat flour per sifter", integer: true },
+  wheatFlourPrice:   { label: "wheat flour price ($)", integer: true },
   startingMoney:     { label: "starting money ($)",   integer: true, internal: true },
   bonusTurnLimit:    { label: "bonus turns",          integer: true, internal: true },
   itemCapBonus:      { label: "bonus storage",        integer: true, internal: true },
@@ -253,6 +270,100 @@ const UPGRADES = [
     effects: { roughFlourPrice: 1 },
   },
 
+  // --- Sifter Yield — more wheat flour from the same rough flour (the ratio) --
+  // These add to wheatFlourPerSifter only, so 10 rough flour in yields more wheat
+  // flour out: base 10:7 → 10:8 → 10:9 → 10:11.
+  {
+    id: "sift_fine_mesh",
+    name: "Fine Mesh",
+    category: "Sifter Yield",
+    desc: "A finer screen keeps more of the good flour. Ratio 10:8.",
+    cost: { money: 350 },
+    effects: { wheatFlourPerSifter: 1 },
+  },
+  {
+    id: "sift_tapered_screen",
+    name: "Tapered Screen",
+    category: "Sifter Yield",
+    desc: "Angled mesh shakes every last grain through. Ratio 10:9.",
+    cost: { money: 1000 },
+    requires: ["sift_fine_mesh"],
+    effects: { wheatFlourPerSifter: 1 },
+  },
+  {
+    id: "sift_double_pass",
+    name: "Double Pass",
+    category: "Sifter Yield",
+    desc: "Run the flour through twice to recover the fines. Ratio 10:11.",
+    cost: { money: 2600, roughFlour: 100 },
+    requires: ["sift_tapered_screen"],
+    effects: { wheatFlourPerSifter: 2 },
+  },
+
+  // --- Sifter Capacity — scale how much a sifter processes (keeps the ratio) --
+  // Multipliers hit BOTH roughFlourPerSifter and wheatFlourPerSifter, so a sifter
+  // handles proportionally more rough flour for proportionally more wheat flour.
+  {
+    id: "sift_bigger_frame",
+    name: "Bigger Frame",
+    category: "Sifter Capacity",
+    desc: "A larger sifting frame handles half again as much each turn (×1.5).",
+    cost: { money: 600 },
+    effects: { roughFlourPerSifter: { mult: 1.5 }, wheatFlourPerSifter: { mult: 1.5 } },
+  },
+  {
+    id: "sift_powered_shaker",
+    name: "Powered Shaker",
+    category: "Sifter Capacity",
+    desc: "A driven shaker doubles how much a sifter can process (×2 capacity).",
+    cost: { money: 1800, roughFlour: 80 },
+    requires: ["sift_bigger_frame"],
+    effects: { roughFlourPerSifter: { mult: 2 }, wheatFlourPerSifter: { mult: 2 } },
+  },
+  {
+    id: "sift_overclock",
+    name: "Shaker Overclock",
+    category: "Sifter Capacity",
+    desc: "Push the shaker harder and harder. +25% capacity each time you buy it.",
+    cost: { money: 1000 },
+    requires: ["sift_bigger_frame"],
+    repeatable: true,
+    maxLevel: 6,
+    costGrowth: 1.4,
+    effects: { roughFlourPerSifter: { mult: 1.25 }, wheatFlourPerSifter: { mult: 1.25 } },
+  },
+
+  // --- Wheat Flour Market — raise what wheat flour sells for ------------------
+  {
+    id: "sift_paper_sacks",
+    name: "Paper Sacks",
+    category: "Wheat Flour Market",
+    desc: "Clean paper sacks keep the flour pristine — worth more. +$3 each.",
+    cost: { money: 500 },
+    effects: { wheatFlourPrice: 3 },
+  },
+  {
+    id: "sift_bakery_deal",
+    name: "Bakery Deal",
+    category: "Wheat Flour Market",
+    desc: "A standing order from the village bakery. +$3 per wheat flour.",
+    cost: { money: 1400 },
+    requires: ["sift_paper_sacks"],
+    effects: { wheatFlourPrice: 3 },
+  },
+  {
+    id: "sift_city_market",
+    name: "City Market",
+    category: "Wheat Flour Market",
+    desc: "Sell fine flour into the city market for a little more each. Buy again and again.",
+    cost: { money: 900 },
+    requires: ["sift_bakery_deal"],
+    repeatable: true,
+    maxLevel: 10,
+    costGrowth: 1.3,
+    effects: { wheatFlourPrice: 1 },
+  },
+
   // --- Storage — raise the stockpile cap for EVERY item (flat +storage) -------
   // These add a flat amount to itemCapBonus, so the shared per-item cap goes up
   // for wheat, rough flour and any future item alike. (Reset on retirement; the
@@ -341,6 +452,26 @@ const PERMANENT_UPGRADES = [
     maxLevel: 15,
     costGrowth: 1.5,
     effects: { roughFlourPrice: 1 },
+  },
+  {
+    id: "perm_family_sifter",
+    name: "Family Sifting Tradition",
+    desc: "A sifting dynasty. Every sifter recovers more wheat flour per load, forever.",
+    cost: 3,
+    repeatable: true,
+    maxLevel: 15,
+    costGrowth: 1.5,
+    effects: { wheatFlourPerSifter: 2 },
+  },
+  {
+    id: "perm_baker_ties",
+    name: "Baker Ties",
+    desc: "Old bakery connections. Wheat flour always sells for a little more.",
+    cost: 4,
+    repeatable: true,
+    maxLevel: 15,
+    costGrowth: 1.5,
+    effects: { wheatFlourPrice: 2 },
   },
   {
     id: "perm_big_family",

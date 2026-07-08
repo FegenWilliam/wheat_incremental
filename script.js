@@ -10,6 +10,7 @@
 const ITEMS = {
   wheat: { name: "Wheat" },
   roughFlour: { name: "Rough Flour" },
+  wheatFlour: { name: "Wheat Flour" },
 };
 
 // What each item sells for, in dollars. This is the base/fallback price; an
@@ -22,6 +23,7 @@ const SELL_PRICES = {
 // Items whose sell price is a derived stat (see BASE_STATS in upgrades.js).
 const PRICE_STATS = {
   roughFlour: "roughFlourPrice",
+  wheatFlour: "wheatFlourPrice",
 };
 
 // Current sell price of an item: the upgrade-driven stat if it has one, else
@@ -62,6 +64,16 @@ const BUILDINGS = {
     worker: "miller",
     rateStats: { wheat: "wheatPerMill", roughFlour: "flourPerMill" },
   },
+  sifter: {
+    name: "Sifter",
+    desc: "Sifts Rough Flour into finer Wheat Flour at a 10:7 ratio. Runs when a sifter is assigned and there's enough rough flour to feed it.",
+    cost: { money: 220 },
+    costGrowth: 1.15,
+    consumes: { roughFlour: 10 },
+    produces: { wheatFlour: 7 },
+    worker: "sifter",
+    rateStats: { roughFlour: "roughFlourPerSifter", wheatFlour: "wheatFlourPerSifter" },
+  },
 };
 
 // Hireable worker TYPES. Hired workers form a pool; you assign them to specific
@@ -79,6 +91,12 @@ const WORKERS = {
     cost: { money: 40 },
     costGrowth: 1.15,
   },
+  sifter: {
+    name: "Sifter",
+    desc: "Works a sifter, sifting rough flour into wheat flour. Assign sifters on the Owned tab.",
+    cost: { money: 55 },
+    costGrowth: 1.15,
+  },
 };
 
 // --- Game state -------------------------------------------------------------
@@ -88,8 +106,8 @@ const game = {
   turnLimit: 80,
   itemCap: 200,           // per-item stockpile limit; same for every item
   money: 0,
-  inventory: { wheat: 0, roughFlour: 0 },
-  workers: { farmer: 0, miller: 0 }, // hired (owned) pool per worker type
+  inventory: { wheat: 0, roughFlour: 0, wheatFlour: 0 },
+  workers: { farmer: 0, miller: 0, sifter: 0 }, // hired (owned) pool per worker type
   buildings: [],          // instances: { uid, type, assigned:{worker:n}, player:bool }
   nextBuildingUid: 1,
   upgrades: {},           // purchased upgrades: id -> level (1 for one-time buys)
@@ -97,7 +115,8 @@ const game = {
   retirementPoints: 0,    // RP: bought in the RP Shop, spent in the Retirement Shop
   hasRetired: false,      // true once the player has retired at least once
   permanentUpgrades: {},  // permanent upgrade id -> level (bought with RP)
-  rpBoughtThisRun: 0,     // RP bought this run; drives RP Shop prices, resets on retire
+  rpBoughtThisRun: {},    // per-resource RP bought this run; drives each resource's own
+                          // RP Shop price independently. Resets on retire.
 };
 
 // Create a building instance and add it to the world.
@@ -218,8 +237,11 @@ function buyUpgrade(id) {
 
 // --- RP Shop pricing --------------------------------------------------------
 // The price of the NEXT Retirement Point rises steeply as you buy more RP THIS
-// RUN. That "bought this run" counter (game.rpBoughtThisRun) resets to 0 on every
-// retirement, so prices climb hard within a run but start cheap again next time.
+// RUN — but each resource climbs its OWN price independently: buying RP with
+// money makes the next money-bought RP dearer without touching the wheat or
+// flour prices, and vice versa. Those per-resource "bought this run" counters
+// (game.rpBoughtThisRun[resource]) all reset to 0 on every retirement, so prices
+// climb hard within a run but start cheap again next time.
 //
 // Each resource declares a `cost`, which is EITHER:
 //   • a full manual price curve as a plain array — one entry per RP, in order:
@@ -261,13 +283,16 @@ function rpPriceAt(resource, n) {
   return Math.max(0, Math.ceil(raw || 0));
 }
 
-// Cost of the next RP bought with `resource`, at the current run's RP count.
-const rpCost = (resource) => rpPriceAt(resource, game.rpBoughtThisRun);
+// RP already bought with `resource` this run (drives that resource's price).
+const rpBought = (resource) => game.rpBoughtThisRun[resource] || 0;
+
+// Cost of the next RP bought with `resource`, at that resource's run count.
+const rpCost = (resource) => rpPriceAt(resource, rpBought(resource));
 
 // How many RP the given resource could buy right now, walking the escalating
 // price up from the current run count (every purchase makes the next dearer).
 function rpAffordable(resource) {
-  let bought = game.rpBoughtThisRun;
+  let bought = rpBought(resource);
   let bal = balance(resource);
   let count = 0;
   while (true) {
@@ -288,7 +313,7 @@ function buyRP(resource, count) {
     if (c <= 0 || balance(resource) < c) break;
     pay({ [resource]: c });
     game.retirementPoints += 1;
-    game.rpBoughtThisRun += 1;
+    game.rpBoughtThisRun[resource] = rpBought(resource) + 1;
     bought += 1;
   }
   if (bought > 0) render();
@@ -338,12 +363,12 @@ function applyPermanentBonuses(setMoney) {
 // applied to the new run.
 function retire() {
   game.turn = 1;
-  game.inventory = { wheat: 0, roughFlour: 0 };
-  game.workers = { farmer: 0, miller: 0 };
+  game.inventory = { wheat: 0, roughFlour: 0, wheatFlour: 0 };
+  game.workers = { farmer: 0, miller: 0, sifter: 0 };
   game.buildings = [];
   game.nextBuildingUid = 1;
   game.upgrades = {};
-  game.rpBoughtThisRun = 0; // RP Shop prices reset for the new run
+  game.rpBoughtThisRun = {}; // per-resource RP Shop prices reset for the new run
   game.hasRetired = true;
   applyPermanentBonuses(true);
   addBuilding("plot", { player: true }); // start again with one worked plot
@@ -878,11 +903,18 @@ function renderUpgrades() {
 
 // --- Prestige rendering -----------------------------------------------------
 
-// The prestige bar (below the title): shown at the turn limit, and always once
-// the player has retired at least once. The Retirement Shop button only appears
-// after the first retirement.
+// Turn at which the prestige bar (Retirement Points Shop, Retire) unlocks within
+// a run. Editable — the bar also always appears once you hit the turn limit or
+// have retired at least once.
+const PRESTIGE_UNLOCK_TURN = 40;
+
+// The prestige bar (below the title): shown from PRESTIGE_UNLOCK_TURN onward (or
+// at the turn limit if that's sooner), and always once the player has retired at
+// least once. The Retirement Shop button only appears after the first retirement.
 function renderPrestigeBar() {
-  const show = game.hasRetired || game.turn >= game.turnLimit;
+  const show = game.hasRetired
+    || game.turn >= PRESTIGE_UNLOCK_TURN
+    || game.turn >= game.turnLimit;
   prestigeBarEl.classList.toggle("hidden", !show);
   openRetirementShopBtn.classList.toggle("hidden", !game.hasRetired);
 }
