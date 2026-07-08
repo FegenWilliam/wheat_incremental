@@ -52,6 +52,9 @@ function sellPrice(item) {
 //                  rate (so upgrades retune throughput). Falls back to the base
 //                  number in produces/consumes when a resource isn't listed.
 //   cost/costGrowth — buy price, scaling with how many of this type you own.
+//   requires     — upgrade ids that must be owned before this building can be
+//                  bought. Until every one is owned the building is hidden from
+//                  the Buildings shop, so it works exactly like a locked upgrade.
 const BUILDINGS = {
   plot: {
     name: "Plot",
@@ -78,6 +81,7 @@ const BUILDINGS = {
     desc: "Sifts Rough Flour into finer Wheat Flour at a 10:7 ratio. Runs when a sifter is assigned and there's enough rough flour to feed it.",
     cost: { money: 220 },
     costGrowth: 1.15,
+    requires: ["unlock_sifter"],
     consumes: { roughFlour: 10 },
     produces: { wheatFlour: 7 },
     worker: "sifter",
@@ -92,6 +96,7 @@ const BUILDINGS = {
     desc: "Holds water for the farm. Fit pipes to it to move water each turn, up to the reservoir's max output.",
     cost: { money: 300 },
     costGrowth: 1.15,
+    requires: ["unlock_white_flour"],
     produces: { water: 5 },
     worker: "pipe",
     capacityStat: "maxPipesPerReservoir",
@@ -107,6 +112,7 @@ const BUILDINGS = {
     desc: "Tempers wheat with water into Tempered Wheat. Needs a temperer's attention and enough wheat and water to run.",
     cost: { money: 260 },
     costGrowth: 1.15,
+    requires: ["unlock_white_flour"],
     consumes: { wheat: 10, water: 5 },
     produces: { temperedWheat: 8 },
     worker: "temperer",
@@ -123,6 +129,7 @@ const BUILDINGS = {
     desc: "Processes Tempered Wheat into premium White Flour. Runs on one processor worker when fed tempered wheat.",
     cost: { money: 400 },
     costGrowth: 1.15,
+    requires: ["unlock_white_flour"],
     consumes: { temperedWheat: 10 },
     produces: { whiteFlour: 8 },
     worker: "processor",
@@ -233,6 +240,12 @@ function scaledCost(def, owned) {
 
 const ownedCount = (type) => game.buildings.filter((b) => b.type === type).length;
 const buildingCost = (type) => scaledCost(BUILDINGS[type], ownedCount(type));
+
+// A building can be bought only once every upgrade in its `requires` list is
+// owned. Buildings with no `requires` (Plot, Mill) are always available. This
+// mirrors how upgrade prerequisites work, but hides the building outright.
+const buildingUnlocked = (type) =>
+  (BUILDINGS[type].requires || []).every((id) => upgradeLevel(id) > 0);
 
 // Worker buy price scales with how many you already own. Most workers use a flat
 // `costGrowth`; a worker with a `costGrowthStat` instead reads its growth live
@@ -725,6 +738,7 @@ function renderStats() {
 function renderBuildingsShop() {
   buildingsListEl.innerHTML = "";
   for (const [type, def] of Object.entries(BUILDINGS)) {
+    if (!buildingUnlocked(type)) continue; // locked behind an unlock upgrade — hide it
     const cost = buildingCost(type);
     const affordable = canAfford(cost);
 

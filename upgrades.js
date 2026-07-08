@@ -138,6 +138,30 @@ const STAT_INFO = {
 // THE UPGRADES. Add as many as you like — one object per upgrade.
 // =============================================================================
 const UPGRADES = [
+  // --- Expansion — unlock new buildings & production chains -------------------
+  // These upgrades don't tune a stat; buying one reveals its building(s) in the
+  // Buildings shop (each gated building lists the upgrade id in its `requires`).
+  // Until then the building's Buy button stays hidden, so a fresh run starts with
+  // only Plots and Mills for sale and the rest of the farm is earned as a
+  // progression. They work like any other upgrade — cost money, buy once.
+  {
+    id: "unlock_sifter",
+    name: "Sifting Line",
+    category: "Expansion",
+    desc: "Set up a sifting line. Unlocks the Sifter in the Buildings shop, turning rough flour into finer, pricier Wheat Flour.",
+    cost: { money: 200 },
+    effects: {},
+  },
+  {
+    id: "unlock_white_flour",
+    name: "White Flour Refinery",
+    category: "Expansion",
+    desc: "Open the whole white-flour chain. Unlocks Water Reservoirs, Tempering Bins and Flour Processors, refining wheat all the way to premium White Flour.",
+    cost: { money: 1200 },
+    requires: ["unlock_sifter"],
+    effects: {},
+  },
+
   // --- Plot Efficiency — more wheat out of every farmer ----------------------
   {
     id: "eff_sharper_scythes",
