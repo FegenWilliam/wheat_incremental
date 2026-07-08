@@ -9,8 +9,11 @@
 // separate currency (uncapped), handled below — it is not an item.
 const ITEMS = {
   wheat: { name: "Wheat" },
+  water: { name: "Water" },              // crafting material — cannot be sold
   roughFlour: { name: "Rough Flour" },
   wheatFlour: { name: "Wheat Flour" },
+  temperedWheat: { name: "Tempered Wheat" }, // crafting material — cannot be sold
+  whiteFlour: { name: "White Flour" },
 };
 
 // What each item sells for, in dollars. This is the base/fallback price; an
@@ -24,7 +27,13 @@ const SELL_PRICES = {
 const PRICE_STATS = {
   roughFlour: "roughFlourPrice",
   wheatFlour: "wheatFlourPrice",
+  whiteFlour: "whiteFlourPrice",
 };
+
+// An item is sellable only if it has a flat sell price or a price stat. Anything
+// else (water, tempered wheat) is a crafting material: it stockpiles and feeds
+// machines, but there's no market for it — the Inventory tab hides its sell row.
+const isSellable = (item) => item in SELL_PRICES || item in PRICE_STATS;
 
 // Current sell price of an item: the upgrade-driven stat if it has one, else
 // its flat SELL_PRICES entry.
@@ -74,6 +83,51 @@ const BUILDINGS = {
     worker: "sifter",
     rateStats: { roughFlour: "roughFlourPerSifter", wheatFlour: "wheatFlourPerSifter" },
   },
+  // Water Reservoir — a plot-class building. Pipes are its "workers": each pipe
+  // moves `waterPerPipe` water per turn, and up to `maxPipesPerReservoir` pipes
+  // fit on one reservoir. The reservoir itself caps total output per turn via
+  // `produceCap` (maxWaterPerReservoir), so it's a max-water-per-turn limiter.
+  reservoir: {
+    name: "Water Reservoir",
+    desc: "Holds water for the farm. Fit pipes to it to move water each turn, up to the reservoir's max output.",
+    cost: { money: 300 },
+    costGrowth: 1.15,
+    produces: { water: 5 },
+    worker: "pipe",
+    capacityStat: "maxPipesPerReservoir",
+    rateStats: { water: "waterPerPipe" },
+    produceCap: { water: "maxWaterPerReservoir" },
+  },
+  // Tempering Bin — dampens wheat with water into tempered wheat. One temperer
+  // worker covers several bins (see WORKERS.temperer.coverageStat), the reverse
+  // of a plot; a bin still runs on a single worker-slot, so it's a single-slot
+  // building here.
+  temperingBin: {
+    name: "Tempering Bin",
+    desc: "Tempers wheat with water into Tempered Wheat. Needs a temperer's attention and enough wheat and water to run.",
+    cost: { money: 260 },
+    costGrowth: 1.15,
+    consumes: { wheat: 10, water: 5 },
+    produces: { temperedWheat: 8 },
+    worker: "temperer",
+    rateStats: {
+      wheat: "wheatPerTemperingBin",
+      water: "waterPerTemperingBin",
+      temperedWheat: "temperedWheatPerTemperingBin",
+    },
+  },
+  // Flour Processor — mills tempered wheat into premium White Flour. A regular
+  // one-machine-one-worker building, like the mill and sifter.
+  flourProcessor: {
+    name: "Flour Processor",
+    desc: "Processes Tempered Wheat into premium White Flour. Runs on one processor worker when fed tempered wheat.",
+    cost: { money: 400 },
+    costGrowth: 1.15,
+    consumes: { temperedWheat: 10 },
+    produces: { whiteFlour: 8 },
+    worker: "processor",
+    rateStats: { temperedWheat: "temperedWheatPerProcessor", whiteFlour: "whiteFlourPerProcessor" },
+  },
 };
 
 // Hireable worker TYPES. Hired workers form a pool; you assign them to specific
@@ -97,6 +151,30 @@ const WORKERS = {
     cost: { money: 55 },
     costGrowth: 1.15,
   },
+  // Pipes move water on reservoirs. `costGrowthStat` makes their buy-price scaling
+  // upgradeable (Pipe upgrades can flatten the cost curve).
+  pipe: {
+    name: "Pipe",
+    desc: "Moves water on a reservoir. Fit pipes to reservoirs on the Owned tab; each carries water every turn.",
+    cost: { money: 30 },
+    costGrowthStat: "pipeCostGrowth",
+  },
+  // A temperer covers several tempering bins at once. `coverageStat` (binsPerTemperer)
+  // sets how many bin worker-slots each hired temperer provides — the reverse of a
+  // plot, and upgradeable.
+  temperer: {
+    name: "Temperer",
+    desc: "Tends tempering bins. Each temperer can cover several bins at once — assign them on the Owned tab.",
+    cost: { money: 60 },
+    costGrowth: 1.15,
+    coverageStat: "binsPerTemperer",
+  },
+  processor: {
+    name: "Processor",
+    desc: "Runs a flour processor, turning tempered wheat into white flour. One per machine.",
+    cost: { money: 70 },
+    costGrowth: 1.15,
+  },
 };
 
 // --- Game state -------------------------------------------------------------
@@ -106,8 +184,8 @@ const game = {
   turnLimit: 80,
   itemCap: 200,           // per-item stockpile limit; same for every item
   money: 0,
-  inventory: { wheat: 0, roughFlour: 0, wheatFlour: 0 },
-  workers: { farmer: 0, miller: 0, sifter: 0 }, // hired (owned) pool per worker type
+  inventory: { wheat: 0, water: 0, roughFlour: 0, wheatFlour: 0, temperedWheat: 0, whiteFlour: 0 },
+  workers: { farmer: 0, miller: 0, sifter: 0, pipe: 0, temperer: 0, processor: 0 }, // hired pool per type
   buildings: [],          // instances: { uid, type, assigned:{worker:n}, player:bool }
   nextBuildingUid: 1,
   upgrades: {},           // purchased upgrades: id -> level (1 for one-time buys)
@@ -155,7 +233,19 @@ function scaledCost(def, owned) {
 
 const ownedCount = (type) => game.buildings.filter((b) => b.type === type).length;
 const buildingCost = (type) => scaledCost(BUILDINGS[type], ownedCount(type));
-const workerCost = (type) => scaledCost(WORKERS[type], game.workers[type] || 0);
+
+// Worker buy price scales with how many you already own. Most workers use a flat
+// `costGrowth`; a worker with a `costGrowthStat` instead reads its growth live
+// from that stat, so upgrades can flatten the curve (never below 1 = no scaling).
+function workerCost(type) {
+  const def = WORKERS[type];
+  const owned = game.workers[type] || 0;
+  if (!def.costGrowthStat) return scaledCost(def, owned);
+  const growth = Math.max(1, deriveStats()[def.costGrowthStat] ?? 1);
+  const out = {};
+  for (const [res, amt] of Object.entries(def.cost)) out[res] = Math.ceil(amt * Math.pow(growth, owned));
+  return out;
+}
 
 // --- Upgrades ---------------------------------------------------------------
 // The upgrade DATA lives in upgrades.js (UPGRADES / BASE_STATS / STAT_INFO),
@@ -363,8 +453,8 @@ function applyPermanentBonuses(setMoney) {
 // applied to the new run.
 function retire() {
   game.turn = 1;
-  game.inventory = { wheat: 0, roughFlour: 0, wheatFlour: 0 };
-  game.workers = { farmer: 0, miller: 0, sifter: 0 };
+  game.inventory = { wheat: 0, water: 0, roughFlour: 0, wheatFlour: 0, temperedWheat: 0, whiteFlour: 0 };
+  game.workers = { farmer: 0, miller: 0, sifter: 0, pipe: 0, temperer: 0, processor: 0 };
   game.buildings = [];
   game.nextBuildingUid = 1;
   game.upgrades = {};
@@ -384,9 +474,18 @@ function totalAssigned(workerType) {
   return game.buildings.reduce((sum, b) => sum + (b.assigned[workerType] || 0), 0);
 }
 
-// Hired but unassigned workers of a type.
+// Total worker-slots a hired pool provides. Normally one slot per worker, but a
+// worker type with a `coverageStat` (e.g. a temperer covering several bins)
+// provides that many slots each — the reverse of the plot model.
+function workerSlots(workerType) {
+  const def = WORKERS[workerType];
+  const per = def.coverageStat ? Math.max(1, Math.floor(deriveStats()[def.coverageStat] ?? 1)) : 1;
+  return (game.workers[workerType] || 0) * per;
+}
+
+// Free (unassigned) worker-slots of a type — what's left to place on buildings.
 function idleWorkers(workerType) {
-  return (game.workers[workerType] || 0) - totalAssigned(workerType);
+  return workerSlots(workerType) - totalAssigned(workerType);
 }
 
 // Everyone working a single building instance (assigned workers + the player).
@@ -427,7 +526,14 @@ function instanceRates(inst) {
   };
   const produces = {};
   const consumes = {};
-  for (const [res, base] of Object.entries(def.produces || {})) produces[res] = rate(res, base);
+  for (const [res, base] of Object.entries(def.produces || {})) {
+    let amt = rate(res, base);
+    // A building may cap a resource's per-turn output (e.g. a reservoir's max
+    // water/turn), regardless of how many workers push against it.
+    const capStat = def.produceCap && def.produceCap[res];
+    if (capStat) amt = Math.min(amt, Math.max(0, Math.floor(stats[capStat] ?? 0)));
+    produces[res] = amt;
+  }
   for (const [res, base] of Object.entries(def.consumes || {})) consumes[res] = rate(res, base);
   return { produces, consumes, workers };
 }
@@ -908,14 +1014,17 @@ function renderUpgrades() {
 // have retired at least once.
 const PRESTIGE_UNLOCK_TURN = 40;
 
-// The prestige bar (below the title): shown from PRESTIGE_UNLOCK_TURN onward (or
-// at the turn limit if that's sooner), and always once the player has retired at
-// least once. The Retirement Shop button only appears after the first retirement.
+// The prestige bar (below the title): the Retirement Points Shop opens from
+// PRESTIGE_UNLOCK_TURN onward (or once you've retired at least once), so the bar
+// itself appears then. The Retire button, though, stays hidden until you actually
+// hit the max turn — you can shop for RP early, but only retire at run's end. The
+// Retirement Shop button only appears after the first retirement.
 function renderPrestigeBar() {
   const show = game.hasRetired
     || game.turn >= PRESTIGE_UNLOCK_TURN
     || game.turn >= game.turnLimit;
   prestigeBarEl.classList.toggle("hidden", !show);
+  retireBtn.classList.toggle("hidden", game.turn < game.turnLimit);
   openRetirementShopBtn.classList.toggle("hidden", !game.hasRetired);
 }
 
@@ -993,7 +1102,17 @@ function renderInventory() {
     const amount = game.inventory[id] || 0;
     const pct = Math.min(100, (amount / game.itemCap) * 100);
     const atCap = amount >= game.itemCap;
+    const sellable = isSellable(id);
     const price = sellPrice(id);
+
+    const sellRow = sellable
+      ? `<div class="btn-row">
+        <span class="row-label">Sell (@ $${price}):</span>
+        <button class="mini-btn sell1" ${amount < 1 ? "disabled" : ""}>Sell 1</button>
+        <button class="mini-btn sell10" ${amount < 1 ? "disabled" : ""}>Sell 10</button>
+        <button class="mini-btn sellall" ${amount < 1 ? "disabled" : ""}>Sell All</button>
+      </div>`
+      : `<div class="btn-row"><span class="row-label">Crafting material — not for sale.</span></div>`;
 
     const card = document.createElement("div");
     card.className = "card";
@@ -1003,16 +1122,13 @@ function renderInventory() {
         <span class="inv-amount ${atCap ? "full" : ""}">${amount} / ${game.itemCap}</span>
       </div>
       <div class="bar"><div class="bar-fill ${atCap ? "full" : ""}" style="width:${pct}%"></div></div>
-      <div class="btn-row">
-        <span class="row-label">Sell (@ $${price}):</span>
-        <button class="mini-btn sell1" ${amount < 1 ? "disabled" : ""}>Sell 1</button>
-        <button class="mini-btn sell10" ${amount < 1 ? "disabled" : ""}>Sell 10</button>
-        <button class="mini-btn sellall" ${amount < 1 ? "disabled" : ""}>Sell All</button>
-      </div>
+      ${sellRow}
     `;
-    card.querySelector(".sell1").addEventListener("click", () => sell(id, 1));
-    card.querySelector(".sell10").addEventListener("click", () => sell(id, 10));
-    card.querySelector(".sellall").addEventListener("click", () => sell(id, "all"));
+    if (sellable) {
+      card.querySelector(".sell1").addEventListener("click", () => sell(id, 1));
+      card.querySelector(".sell10").addEventListener("click", () => sell(id, 10));
+      card.querySelector(".sellall").addEventListener("click", () => sell(id, "all"));
+    }
     inventoryListEl.appendChild(card);
   }
 }

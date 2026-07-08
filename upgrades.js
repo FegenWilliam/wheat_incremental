@@ -56,6 +56,20 @@
 //   • PRICE — add to wheatFlourPrice (+2 → sells for $14).
 // (One sifter = one sifter worker; that cap is fixed in script.js.)
 //
+// Water & the white-flour chain (reservoir → tempering bin → flour processor):
+//   • RESERVOIR — a plot-class building worked by pipes. `waterPerPipe` is each
+//     pipe's output, `maxPipesPerReservoir` how many pipes fit, and
+//     `maxWaterPerReservoir` caps total water/turn no matter how many pipes push.
+//     `pipeCostGrowth` scales the pipe buy-price; multiply it DOWN toward 1 to
+//     soften the cost curve (a "price scaling reduction").
+//   • TEMPERING BIN — CAPACITY: ×all three bin stats together to scale throughput;
+//     RATIO: add to temperedWheatPerTemperingBin alone for more yield per load.
+//     `binsPerTemperer` is how many bins one temperer covers (raise it = more bins
+//     per hire — the reverse of a plot).
+//   • FLOUR PROCESSOR — CAPACITY: ×both processor stats; RATIO: add to
+//     whiteFlourPerProcessor alone; PRICE: add to whiteFlourPrice. One processor =
+//     one processor worker.
+//
 // Want a brand-new stat? Add it to BASE_STATS and STAT_INFO just below, then any
 // upgrade can target it. (Making it actually *do* something in production lives
 // in script.js's instanceRates — but the stats above are already wired.)
@@ -71,6 +85,20 @@ const BASE_STATS = {
   roughFlourPerSifter: 10,  // rough flour one sifter feeds in, per turn (the "rate"/capacity).
   wheatFlourPerSifter: 7,   // wheat flour one sifter sifts out, per turn.
   wheatFlourPrice: 12,      // dollars each wheat flour sells for.
+  // --- Water: reservoirs (max water/turn) + pipes (the movers) ----------------
+  waterPerPipe: 5,          // water one pipe moves per turn (per-pipe rate).
+  maxPipesPerReservoir: 1,  // how many pipes fit on one reservoir at once.
+  maxWaterPerReservoir: 20, // hard cap on a reservoir's water output per turn.
+  pipeCostGrowth: 1.15,     // ×price per pipe already owned; upgrades flatten it toward 1.
+  // --- Tempering bin: wheat + water -> tempered wheat -------------------------
+  wheatPerTemperingBin: 10,          // wheat one bin consumes per turn.
+  waterPerTemperingBin: 5,           // water one bin consumes per turn.
+  temperedWheatPerTemperingBin: 8,   // tempered wheat one bin makes per turn.
+  binsPerTemperer: 4,                // tempering bins a single temperer can cover.
+  // --- Flour processor: tempered wheat -> white flour ------------------------
+  temperedWheatPerProcessor: 10,     // tempered wheat one processor consumes per turn.
+  whiteFlourPerProcessor: 8,         // white flour one processor makes per turn.
+  whiteFlourPrice: 20,               // dollars each white flour sells for.
   // --- Prestige stats. Driven by PERMANENT_UPGRADES (bought with Retirement
   // Points) and applied at the start of each run — see script.js. ---
   startingMoney: 0,   // dollars in the bank at the start of every run
@@ -90,6 +118,17 @@ const STAT_INFO = {
   roughFlourPerSifter: { label: "rough flour per sifter", integer: true },
   wheatFlourPerSifter: { label: "wheat flour per sifter", integer: true },
   wheatFlourPrice:   { label: "wheat flour price ($)", integer: true },
+  waterPerPipe:      { label: "water per pipe",        integer: true },
+  maxPipesPerReservoir: { label: "max pipes per reservoir", integer: true },
+  maxWaterPerReservoir: { label: "max water per reservoir", integer: true },
+  pipeCostGrowth:    { label: "pipe cost scaling",     integer: false, internal: true },
+  wheatPerTemperingBin: { label: "wheat per tempering bin", integer: true },
+  waterPerTemperingBin: { label: "water per tempering bin", integer: true },
+  temperedWheatPerTemperingBin: { label: "tempered wheat per bin", integer: true },
+  binsPerTemperer:   { label: "bins per temperer",     integer: true },
+  temperedWheatPerProcessor: { label: "tempered wheat per processor", integer: true },
+  whiteFlourPerProcessor: { label: "white flour per processor", integer: true },
+  whiteFlourPrice:   { label: "white flour price ($)", integer: true },
   startingMoney:     { label: "starting money ($)",   integer: true, internal: true },
   bonusTurnLimit:    { label: "bonus turns",          integer: true, internal: true },
   itemCapBonus:      { label: "bonus storage",        integer: true, internal: true },
@@ -364,6 +403,172 @@ const UPGRADES = [
     effects: { wheatFlourPrice: 1 },
   },
 
+  // --- Water Reservoirs — bigger output cap and room for more pipes ----------
+  // MAX PRODUCTION raises the reservoir's water/turn ceiling; MAX PIPES lets more
+  // pipes work one reservoir (it's a plot-class building).
+  {
+    id: "res_wider_mains",
+    name: "Wider Mains",
+    category: "Water Reservoirs",
+    desc: "Fatter feed pipes let a reservoir push more water each turn. +15 max water/turn.",
+    cost: { money: 400 },
+    effects: { maxWaterPerReservoir: 15 },
+  },
+  {
+    id: "res_pumping_station",
+    name: "Pumping Station",
+    category: "Water Reservoirs",
+    desc: "A powered station keeps the water moving. +30 max water/turn.",
+    cost: { money: 1200 },
+    requires: ["res_wider_mains"],
+    effects: { maxWaterPerReservoir: 30 },
+  },
+  {
+    id: "res_extra_ports",
+    name: "Extra Ports",
+    category: "Water Reservoirs",
+    desc: "Cut another port so one more pipe can work each reservoir.",
+    cost: { money: 700 },
+    effects: { maxPipesPerReservoir: 1 },
+  },
+  {
+    id: "res_manifold",
+    name: "Manifold",
+    category: "Water Reservoirs",
+    desc: "A branching manifold fits two more pipes on every reservoir.",
+    cost: { money: 2400, water: 60 },
+    requires: ["res_extra_ports"],
+    effects: { maxPipesPerReservoir: 2 },
+  },
+
+  // --- Pipes — more water per pipe, and cheaper pipe scaling ------------------
+  {
+    id: "pipe_wider_bore",
+    name: "Wider Bore",
+    category: "Pipes",
+    desc: "A wider bore carries more water per pipe, every turn. +3 water per pipe.",
+    cost: { money: 500 },
+    effects: { waterPerPipe: 3 },
+  },
+  {
+    id: "pipe_pressurized",
+    name: "Pressurized Flow",
+    category: "Pipes",
+    desc: "Pressurize the line to push half again as much water (×1.5 per pipe).",
+    cost: { money: 1500, water: 50 },
+    requires: ["pipe_wider_bore"],
+    effects: { waterPerPipe: { mult: 1.5 } },
+  },
+  {
+    id: "pipe_standard_fittings",
+    name: "Standard Fittings",
+    category: "Pipes",
+    desc: "Standardized fittings make each new pipe cheaper than the last. Softens pipe price scaling. Buy again and again.",
+    cost: { money: 600 },
+    repeatable: true,
+    maxLevel: 8,
+    costGrowth: 1.3,
+    effects: { pipeCostGrowth: { mult: 0.95 } },
+  },
+
+  // --- Tempering — bin throughput/yield, plus bins per temperer --------------
+  {
+    id: "temper_bigger_bin",
+    name: "Bigger Bin",
+    category: "Tempering",
+    desc: "A larger bin tempers half again as much each turn (×1.5 capacity).",
+    cost: { money: 700 },
+    effects: {
+      wheatPerTemperingBin: { mult: 1.5 },
+      waterPerTemperingBin: { mult: 1.5 },
+      temperedWheatPerTemperingBin: { mult: 1.5 },
+    },
+  },
+  {
+    id: "temper_even_soak",
+    name: "Even Soak",
+    category: "Tempering",
+    desc: "Evenly dampened grain wastes less — more tempered wheat per load. +2 yield.",
+    cost: { money: 900 },
+    effects: { temperedWheatPerTemperingBin: 2 },
+  },
+  {
+    id: "temper_rest_time",
+    name: "Longer Rest",
+    category: "Tempering",
+    desc: "Give the grain longer to rest for a fuller temper. +2 yield.",
+    cost: { money: 2000, water: 60 },
+    requires: ["temper_even_soak"],
+    effects: { temperedWheatPerTemperingBin: 2 },
+  },
+  {
+    id: "temper_multi_tending",
+    name: "Multi-Tending",
+    category: "Tempering",
+    desc: "Trained temperers keep an eye on more bins at once. +2 bins per temperer.",
+    cost: { money: 1500 },
+    effects: { binsPerTemperer: 2 },
+  },
+  {
+    id: "temper_clipboard_system",
+    name: "Clipboard System",
+    category: "Tempering",
+    desc: "A tracking system lets each temperer cover even more bins. +3 bins per temperer.",
+    cost: { money: 3500 },
+    requires: ["temper_multi_tending"],
+    effects: { binsPerTemperer: 3 },
+  },
+
+  // --- Flour Processor — capacity, yield, and white-flour price --------------
+  {
+    id: "proc_bigger_rollers",
+    name: "Bigger Rollers",
+    category: "Flour Processor",
+    desc: "Wider rollers process half again as much tempered wheat (×1.5 capacity).",
+    cost: { money: 900 },
+    effects: {
+      temperedWheatPerProcessor: { mult: 1.5 },
+      whiteFlourPerProcessor: { mult: 1.5 },
+    },
+  },
+  {
+    id: "proc_precision_rollers",
+    name: "Precision Rollers",
+    category: "Flour Processor",
+    desc: "Finely set rollers recover more white flour per load. +2 yield.",
+    cost: { money: 1300 },
+    effects: { whiteFlourPerProcessor: 2 },
+  },
+  {
+    id: "proc_air_classifier",
+    name: "Air Classifier",
+    category: "Flour Processor",
+    desc: "An air classifier separates the finest flour, boosting yield further. +3 yield.",
+    cost: { money: 3200, temperedWheat: 80 },
+    requires: ["proc_precision_rollers"],
+    effects: { whiteFlourPerProcessor: 3 },
+  },
+  {
+    id: "proc_premium_label",
+    name: "Premium Label",
+    category: "Flour Processor",
+    desc: "Brand your white flour as premium goods. +$4 per white flour.",
+    cost: { money: 1500 },
+    effects: { whiteFlourPrice: 4 },
+  },
+  {
+    id: "proc_patisserie_deal",
+    name: "Patisserie Deal",
+    category: "Flour Processor",
+    desc: "Supply the city patisseries with fine flour. Buy again and again. +$2 each.",
+    cost: { money: 1800 },
+    requires: ["proc_premium_label"],
+    repeatable: true,
+    maxLevel: 10,
+    costGrowth: 1.3,
+    effects: { whiteFlourPrice: 2 },
+  },
+
   // --- Storage — raise the stockpile cap for EVERY item (flat +storage) -------
   // These add a flat amount to itemCapBonus, so the shared per-item cap goes up
   // for wheat, rough flour and any future item alike. (Reset on retirement; the
@@ -472,6 +677,26 @@ const PERMANENT_UPGRADES = [
     maxLevel: 15,
     costGrowth: 1.5,
     effects: { wheatFlourPrice: 2 },
+  },
+  {
+    id: "perm_deep_wells",
+    name: "Deep Wells",
+    desc: "Tap deeper water tables. Every pipe carries more water from the very start.",
+    cost: 3,
+    repeatable: true,
+    maxLevel: 15,
+    costGrowth: 1.5,
+    effects: { waterPerPipe: 1 },
+  },
+  {
+    id: "perm_patissier_dynasty",
+    name: "Patissier Dynasty",
+    desc: "A family name the finest bakeries trust. White flour always sells for more.",
+    cost: 5,
+    repeatable: true,
+    maxLevel: 15,
+    costGrowth: 1.5,
+    effects: { whiteFlourPrice: 2 },
   },
   {
     id: "perm_big_family",
