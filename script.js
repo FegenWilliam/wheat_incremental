@@ -55,6 +55,8 @@ function sellPrice(item) {
 //   requires     — upgrade ids that must be owned before this building can be
 //                  bought. Until every one is owned the building is hidden from
 //                  the Buildings shop, so it works exactly like a locked upgrade.
+//                  Add the matching unlock upgrade in upgrades.js (see its
+//                  "Requirements & unlocking buildings" section for the recipe).
 const BUILDINGS = {
   plot: {
     name: "Plot",
