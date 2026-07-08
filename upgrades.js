@@ -2,9 +2,21 @@
 // =============================================================================
 // THIS FILE IS MEANT TO BE EDITED BY HAND.
 //
-// Adding an upgrade = adding one entry to the UPGRADES array below. You never
-// need to touch script.js — the game reads this list and builds the Upgrades
-// tab, the costs, the prerequisites and the effects automatically.
+// Adding an upgrade = adding one entry to the UPGRADES array below. For ordinary
+// upgrades you never touch script.js — the game reads this list and builds the
+// Upgrades tab, the costs, the prerequisites and the effects automatically. (The
+// one exception is an UNLOCK upgrade that reveals a building: it also needs a
+// single line in script.js — see "Requirements & unlocking buildings" below.)
+//
+// ---- Where to edit what -----------------------------------------------------
+//   An upgrade's name / price / effect / requirement .. this file, UPGRADES.
+//   Permanent (Retirement-Point) upgrades ............. this file, PERMANENT_UPGRADES.
+//   A brand-new stat to boost ......................... this file, BASE_STATS + STAT_INFO.
+//   A building's name / price / what it makes ......... script.js, BUILDINGS.
+//   Which buildings start locked (gated progression) .. script.js, BUILDINGS `requires`.
+//   The price of buying Retirement Points ............. script.js, RP_EXCHANGE.
+//   Run length & when prestige unlocks ................ script.js, game.turnLimit
+//                                                       and PRESTIGE_UNLOCK_TURN.
 //
 // ---- Upgrade fields ---------------------------------------------------------
 //   id         (required)  unique string. Never reuse or rename one that's live.
@@ -14,6 +26,7 @@
 //   desc       (optional)  a sentence of flavor / explanation.
 //   category   (optional)  groups cards under a heading (default "Misc").
 //   requires   (optional)  ["other_id", ...] — all must be owned before unlock.
+//                          (Buildings read this too — see below.)
 //   repeatable (optional)  true = can be bought many times; the effect stacks.
 //   maxLevel   (optional)  cap for a repeatable upgrade (default: unlimited).
 //   costGrowth (optional)  repeatable cost ×multiplier per level (default 1.15).
@@ -30,6 +43,26 @@
 // Across ALL owned upgrades, additive bonuses are summed onto the base first,
 // then every multiplier is applied — so the order you buy things never matters:
 //     final = (base + Σadd) × Πmult
+//
+// ---- Requirements & unlocking buildings (gated progression) -----------------
+// `requires: ["some_id", ...]` hides an upgrade until every listed upgrade is
+// owned — that's how you build a chain (buy A to reveal B to reveal C).
+//
+// The SAME field gates BUILDINGS, which is how a new run starts with only some
+// buildings for sale and the rest earned later. A building whose `requires` is
+// unmet is hidden from the Buildings shop entirely. To lock a building behind an
+// upgrade, two small edits:
+//   1) HERE — add a normal upgrade with an empty effect. It changes no stat; its
+//      only job is to be a key the building looks for:
+//          { id: "unlock_bakery", name: "Open a Bakery", category: "Expansion",
+//            cost: { money: 500 }, effects: {} },
+//   2) script.js — give the building a matching `requires`:
+//          bakery: { name: "Bakery", cost: { money: 800 }, /* … */,
+//                    requires: ["unlock_bakery"] },
+// Now the Bakery only appears once "Open a Bakery" is bought. Two live examples
+// already work this way — copy them as templates: `unlock_sifter` (reveals the
+// Sifter) and `unlock_white_flour` (reveals the whole reservoir → tempering bin
+// → flour processor chain).
 //
 // ---- Stats you can modify ---------------------------------------------------
 //   wheatPerFarmer     base 10  — wheat each farmer makes per plot, per turn.
@@ -138,6 +171,30 @@ const STAT_INFO = {
 // THE UPGRADES. Add as many as you like — one object per upgrade.
 // =============================================================================
 const UPGRADES = [
+  // --- Expansion — unlock new buildings & production chains -------------------
+  // These upgrades don't tune a stat; buying one reveals its building(s) in the
+  // Buildings shop (each gated building lists the upgrade id in its `requires`).
+  // Until then the building's Buy button stays hidden, so a fresh run starts with
+  // only Plots and Mills for sale and the rest of the farm is earned as a
+  // progression. They work like any other upgrade — cost money, buy once.
+  {
+    id: "unlock_sifter",
+    name: "Sifting Line",
+    category: "Expansion",
+    desc: "Set up a sifting line. Unlocks the Sifter in the Buildings shop, turning rough flour into finer, pricier Wheat Flour.",
+    cost: { money: 200 },
+    effects: {},
+  },
+  {
+    id: "unlock_white_flour",
+    name: "White Flour Refinery",
+    category: "Expansion",
+    desc: "Open the whole white-flour chain. Unlocks Water Reservoirs, Tempering Bins and Flour Processors, refining wheat all the way to premium White Flour.",
+    cost: { money: 1200 },
+    requires: ["unlock_sifter"],
+    effects: {},
+  },
+
   // --- Plot Efficiency — more wheat out of every farmer ----------------------
   {
     id: "eff_sharper_scythes",
